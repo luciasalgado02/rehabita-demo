@@ -1,7 +1,7 @@
 import express from 'express'
 import session from 'express-session'
 import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto'
-import { SQLiteSessionStore } from './sqlite-session-store.js'
+import { PersistentSessionStore } from './session-store.js'
 import { hashPassword, MIN_PASSWORD_LENGTH, verifyPassword } from './passwords.js'
 import { exercisesById } from '../shared/exercises.js'
 
@@ -53,7 +53,7 @@ export function createApiApp({ db, sessionSecret, production = false } = {}) {
 
   const app = express()
   const secureCookie = production
-  const store = new SQLiteSessionStore(db)
+  const store = new PersistentSessionStore(db)
   const attempts = new Map()
 
   app.disable('x-powered-by')
@@ -110,23 +110,27 @@ export function createApiApp({ db, sessionSecret, production = false } = {}) {
     next()
   }
 
-  function requireUser(req, res, next) {
-    const userId = req.session?.userId
-    if (!userId) {
-      res.status(401).json({ error: 'La sesión venció. Iniciá sesión nuevamente.' })
-      return
-    }
-    const user = db.prepare('SELECT id, role, active FROM users WHERE id = ?').get(userId)
-    if (!user || !user.active) {
-      req.session.destroy((error) => {
-        if (error) return next(error)
-        clearSessionCookie(res, secureCookie)
+  async function requireUser(req, res, next) {
+    try {
+      const userId = req.session?.userId
+      if (!userId) {
         res.status(401).json({ error: 'La sesión venció. Iniciá sesión nuevamente.' })
-      })
-      return
+        return
+      }
+      const user = await db.get('SELECT id, role, active FROM users WHERE id = ?', [userId])
+      if (!user || !user.active) {
+        req.session.destroy((error) => {
+          if (error) return next(error)
+          clearSessionCookie(res, secureCookie)
+          res.status(401).json({ error: 'La sesión venció. Iniciá sesión nuevamente.' })
+        })
+        return
+      }
+      req.user = user
+      next()
+    } catch (error) {
+      next(error)
     }
-    req.user = user
-    next()
   }
 
   function requireRole(role) {
@@ -162,29 +166,29 @@ export function createApiApp({ db, sessionSecret, production = false } = {}) {
     next()
   }
 
-  function getTherapistPatient(patientId, therapistId) {
-    return db.prepare(`
+  async function getTherapistPatient(patientId, therapistId) {
+    return db.get(`
       SELECT patients.id AS id, first_name AS firstName, last_name AS lastName,
         patients.birth_date AS birthDate, patients.created_at AS createdAt, users.dni AS dni
       FROM patients JOIN users ON users.id = patients.user_id
       WHERE patients.id = ? AND patients.therapist_id = ?
-    `).get(patientId, therapistId)
+    `, [patientId, therapistId])
   }
 
-  function getOrCreatePatientPlan(patientId, therapistId) {
-    const plan = db.prepare(`
+  async function getOrCreatePatientPlan(tx, patientId, therapistId) {
+    const plan = await tx.get(`
       SELECT id FROM plans
       WHERE patient_id = ? AND therapist_id = ?
       ORDER BY created_at, id LIMIT 1
-    `).get(patientId, therapistId)
+    `, [patientId, therapistId])
     if (plan) return plan.id
     const planId = randomUUID()
-    db.prepare('INSERT INTO plans (id, patient_id, therapist_id) VALUES (?, ?, ?)').run(planId, patientId, therapistId)
+    await tx.run('INSERT INTO plans (id, patient_id, therapist_id) VALUES (?, ?, ?)', [planId, patientId, therapistId])
     return planId
   }
 
-  function getPlanExerciseIds(patientId) {
-    return db.prepare(`
+  async function getPlanExerciseIds(patientId) {
+    const rows = await db.all(`
       SELECT plan_exercises.exercise_id AS id
       FROM plan_exercises
       WHERE plan_exercises.plan_id = (
@@ -192,7 +196,8 @@ export function createApiApp({ db, sessionSecret, production = false } = {}) {
         ORDER BY created_at, id LIMIT 1
       )
       ORDER BY plan_exercises.exercise_id
-    `).all(patientId).map(({ id }) => id)
+    `, [patientId])
+    return rows.map(({ id }) => id)
   }
 
   app.get('/api/auth/csrf', (req, res, next) => {
@@ -203,17 +208,17 @@ export function createApiApp({ db, sessionSecret, production = false } = {}) {
     })
   })
 
-  app.get('/api/health', (req, res) => {
-    db.prepare('SELECT 1').get()
+  app.get('/api/health', async (req, res) => {
+    await db.get('SELECT 1')
     res.json({ status: 'ok' })
   })
 
-  app.get('/api/auth/me', (req, res, next) => {
+  app.get('/api/auth/me', async (req, res, next) => {
     if (!req.session?.userId) {
       res.json({ user: null })
       return
     }
-    const user = db.prepare('SELECT id, role, active FROM users WHERE id = ?').get(req.session.userId)
+    const user = await db.get('SELECT id, role, active FROM users WHERE id = ?', [req.session.userId])
     if (!user || !user.active) {
       req.session.destroy((error) => {
         if (error) return next(error)
@@ -223,7 +228,7 @@ export function createApiApp({ db, sessionSecret, production = false } = {}) {
       return
     }
     const profile = user.role === 'patient'
-      ? db.prepare('SELECT first_name, last_name FROM patients WHERE user_id = ?').get(user.id)
+      ? await db.get('SELECT first_name, last_name FROM patients WHERE user_id = ?', [user.id])
       : null
     if (user.role === 'patient' && !profile) {
       res.status(500).json({ error: 'No se pudo cargar la cuenta. Contactá a tu terapeuta.' })
@@ -247,7 +252,7 @@ export function createApiApp({ db, sessionSecret, production = false } = {}) {
     }
 
     try {
-      const user = db.prepare('SELECT id, password_hash, role, active FROM users WHERE dni = ? AND role = ?').get(dni, role)
+      const user = await db.get('SELECT id, password_hash, role, active FROM users WHERE dni = ? AND role = ?', [dni, role])
       const passwordValid = await verifyPassword(password, user?.password_hash || dummyHash)
       if (!user || !user.active || !passwordValid) {
         res.status(401).json({ error: 'No se pudo iniciar sesión. Revisá tus datos e intentá nuevamente.' })
@@ -255,7 +260,7 @@ export function createApiApp({ db, sessionSecret, production = false } = {}) {
       }
 
       const patient = user.role === 'patient'
-        ? db.prepare('SELECT first_name, last_name FROM patients WHERE user_id = ?').get(user.id)
+        ? await db.get('SELECT first_name, last_name FROM patients WHERE user_id = ?', [user.id])
         : null
       if (user.role === 'patient' && !patient) {
         res.status(500).json({ error: 'No se pudo completar el acceso. Contactá a tu terapeuta.' })
@@ -297,8 +302,8 @@ export function createApiApp({ db, sessionSecret, production = false } = {}) {
     })
   })
 
-  app.get('/api/therapist/patients', requireRole('therapist'), (req, res) => {
-    const patients = db.prepare(`
+  app.get('/api/therapist/patients', requireRole('therapist'), async (req, res) => {
+    const patients = await db.all(`
       SELECT patients.id, patients.first_name AS firstName, patients.last_name AS lastName,
         patients.birth_date AS birthDate, patients.created_at AS createdAt,
         EXISTS (
@@ -308,7 +313,7 @@ export function createApiApp({ db, sessionSecret, production = false } = {}) {
       FROM patients
       WHERE patients.therapist_id = ?
       ORDER BY patients.last_name, patients.first_name
-    `).all(req.user.id)
+    `, [req.user.id])
     res.json({
       patients: patients.map((patient) => ({
         ...patient,
@@ -318,8 +323,8 @@ export function createApiApp({ db, sessionSecret, production = false } = {}) {
     })
   })
 
-  app.get('/api/therapist/patients/:patientId', requireRole('therapist'), (req, res) => {
-    const patient = getTherapistPatient(req.params.patientId, req.user.id)
+  app.get('/api/therapist/patients/:patientId', requireRole('therapist'), async (req, res) => {
+    const patient = await getTherapistPatient(req.params.patientId, req.user.id)
     if (!patient) {
       res.status(404).json({ error: 'No se encontró el paciente solicitado.' })
       return
@@ -327,28 +332,32 @@ export function createApiApp({ db, sessionSecret, production = false } = {}) {
     res.json({ patient: { ...patient, age: getAge(patient.birthDate) } })
   })
 
-  app.delete('/api/therapist/patients/:patientId', requireCsrf, requireRole('therapist'), (req, res, next) => {
+  app.delete('/api/therapist/patients/:patientId', requireCsrf, requireRole('therapist'), async (req, res, next) => {
     try {
-      const deletePatient = db.transaction(() => {
-        const patient = getTherapistPatient(req.params.patientId, req.user.id)
+      const result = await db.withTransaction(async (tx) => {
+        const patient = await tx.get(`
+          SELECT patients.id AS id
+          FROM patients JOIN users ON users.id = patients.user_id
+          WHERE patients.id = ? AND patients.therapist_id = ?
+        `, [req.params.patientId, req.user.id])
         if (!patient) return 'not-found'
 
-        const hasSessionHistory = db.prepare(
-          'SELECT 1 FROM session_records WHERE patient_id = ? LIMIT 1'
-        ).get(patient.id)
+        const hasSessionHistory = await tx.get(
+          'SELECT 1 FROM session_records WHERE patient_id = ? LIMIT 1',
+          [patient.id]
+        )
         if (hasSessionHistory) return 'has-history'
 
-        const account = db.prepare(`
+        const account = await tx.get(`
           SELECT users.id AS userId
           FROM patients JOIN users ON users.id = patients.user_id
           WHERE patients.id = ? AND patients.therapist_id = ? AND users.role = 'patient'
-        `).get(patient.id, req.user.id)
+        `, [patient.id, req.user.id])
         if (!account) return 'not-found'
 
-        db.prepare("DELETE FROM users WHERE id = ? AND role = 'patient'").run(account.userId)
+        await tx.run("DELETE FROM users WHERE id = ? AND role = 'patient'", [account.userId])
         return 'deleted'
       })
-      const result = deletePatient.immediate()
       if (result === 'not-found') {
         res.status(404).json({ error: 'No se encontró el paciente solicitado.' })
         return
@@ -365,17 +374,17 @@ export function createApiApp({ db, sessionSecret, production = false } = {}) {
     }
   })
 
-  app.get('/api/therapist/patients/:patientId/exercises', requireRole('therapist'), (req, res) => {
-    const patient = getTherapistPatient(req.params.patientId, req.user.id)
+  app.get('/api/therapist/patients/:patientId/exercises', requireRole('therapist'), async (req, res) => {
+    const patient = await getTherapistPatient(req.params.patientId, req.user.id)
     if (!patient) {
       res.status(404).json({ error: 'No se encontró el paciente solicitado.' })
       return
     }
-    res.json({ exerciseIds: getPlanExerciseIds(patient.id) })
+    res.json({ exerciseIds: await getPlanExerciseIds(patient.id) })
   })
 
-  app.put('/api/therapist/patients/:patientId/exercises', requireCsrf, requireRole('therapist'), (req, res) => {
-    const patient = getTherapistPatient(req.params.patientId, req.user.id)
+  app.put('/api/therapist/patients/:patientId/exercises', requireCsrf, requireRole('therapist'), async (req, res) => {
+    const patient = await getTherapistPatient(req.params.patientId, req.user.id)
     if (!patient) {
       res.status(404).json({ error: 'No se encontró el paciente solicitado.' })
       return
@@ -387,14 +396,14 @@ export function createApiApp({ db, sessionSecret, production = false } = {}) {
       return
     }
 
-    const savePlan = db.transaction(() => {
-      const planId = getOrCreatePatientPlan(patient.id, req.user.id)
-      db.prepare('DELETE FROM plan_exercises WHERE plan_id = ?').run(planId)
-      const insertExercise = db.prepare('INSERT INTO plan_exercises (plan_id, exercise_id) VALUES (?, ?)')
-      for (const exerciseId of exerciseIds) insertExercise.run(planId, exerciseId)
-      db.prepare("UPDATE plans SET updated_at = datetime('now') WHERE id = ?").run(planId)
+    await db.withTransaction(async (tx) => {
+      const planId = await getOrCreatePatientPlan(tx, patient.id, req.user.id)
+      await tx.run('DELETE FROM plan_exercises WHERE plan_id = ?', [planId])
+      for (const exerciseId of exerciseIds) {
+        await tx.run('INSERT INTO plan_exercises (plan_id, exercise_id) VALUES (?, ?)', [planId, exerciseId])
+      }
+      await tx.run("UPDATE plans SET updated_at = datetime('now') WHERE id = ?", [planId])
     })
-    savePlan.immediate()
     res.json({ exerciseIds })
   })
 
@@ -416,19 +425,18 @@ export function createApiApp({ db, sessionSecret, production = false } = {}) {
       const userId = randomUUID()
       const patientId = randomUUID()
       const passwordHash = await hashPassword(password)
-      const createPatient = db.transaction(() => {
-        db.prepare(`
+      await db.withTransaction(async (tx) => {
+        await tx.run(`
           INSERT INTO users (id, dni, password_hash, role) VALUES (?, ?, ?, 'patient')
-        `).run(userId, dni, passwordHash)
-        db.prepare(`
+        `, [userId, dni, passwordHash])
+        await tx.run(`
           INSERT INTO patients (id, user_id, therapist_id, first_name, last_name)
           VALUES (?, ?, ?, ?, ?)
-        `).run(patientId, userId, req.user.id, firstName.trim(), lastName.trim())
+        `, [patientId, userId, req.user.id, firstName.trim(), lastName.trim()])
         if (birthDate) {
-          db.prepare('UPDATE patients SET birth_date = ? WHERE id = ?').run(birthDate, patientId)
+          await tx.run('UPDATE patients SET birth_date = ? WHERE id = ?', [birthDate, patientId])
         }
       })
-      createPatient()
       res.status(201).json({
         patient: {
           id: patientId,
@@ -439,7 +447,7 @@ export function createApiApp({ db, sessionSecret, production = false } = {}) {
         },
       })
     } catch (error) {
-      if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+      if (error.code === 'SQLITE_CONSTRAINT_UNIQUE' || error.code === '23505') {
         res.status(409).json({ error: 'No se pudo crear el paciente. Verificá que los datos sean únicos.' })
         return
       }
@@ -447,11 +455,11 @@ export function createApiApp({ db, sessionSecret, production = false } = {}) {
     }
   })
 
-  app.get('/api/patient/me', requireRole('patient'), (req, res) => {
-    const patient = db.prepare(`
+  app.get('/api/patient/me', requireRole('patient'), async (req, res) => {
+    const patient = await db.get(`
       SELECT id, first_name AS firstName, last_name AS lastName, created_at AS createdAt
       FROM patients WHERE user_id = ?
-    `).get(req.user.id)
+    `, [req.user.id])
     if (!patient) {
       res.status(404).json({ error: 'No se encontró la ficha asociada a esta cuenta.' })
       return
@@ -459,28 +467,28 @@ export function createApiApp({ db, sessionSecret, production = false } = {}) {
     res.json({ patient })
   })
 
-  app.get('/api/patient/exercises', requireRole('patient'), (req, res) => {
-    const patient = db.prepare('SELECT id FROM patients WHERE user_id = ?').get(req.user.id)
+  app.get('/api/patient/exercises', requireRole('patient'), async (req, res) => {
+    const patient = await db.get('SELECT id FROM patients WHERE user_id = ?', [req.user.id])
     if (!patient) {
       res.status(404).json({ error: 'No se encontró la ficha asociada a esta cuenta.' })
       return
     }
-    const exerciseIds = getPlanExerciseIds(patient.id)
+    const exerciseIds = await getPlanExerciseIds(patient.id)
     res.json({ exerciseIds })
   })
 
-  app.get('/api/patient/exercises/:exerciseId', requireRole('patient'), (req, res) => {
+  app.get('/api/patient/exercises/:exerciseId', requireRole('patient'), async (req, res) => {
     const exercise = exercisesById.get(req.params.exerciseId)
     if (!exercise) {
       res.status(404).json({ error: 'No se encontró el ejercicio solicitado.' })
       return
     }
-    const patient = db.prepare('SELECT id FROM patients WHERE user_id = ?').get(req.user.id)
+    const patient = await db.get('SELECT id FROM patients WHERE user_id = ?', [req.user.id])
     if (!patient) {
       res.status(404).json({ error: 'No se encontró la ficha asociada a esta cuenta.' })
       return
     }
-    if (!getPlanExerciseIds(patient.id).includes(exercise.id)) {
+    if (!(await getPlanExerciseIds(patient.id)).includes(exercise.id)) {
       res.status(403).json({ error: 'Este ejercicio no está incluido en tu planificación.' })
       return
     }

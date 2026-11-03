@@ -70,5 +70,50 @@ export function openDatabase(filename = process.env.DATABASE_PATH || path.join(p
     CREATE INDEX IF NOT EXISTS session_records_patient_idx ON session_records(patient_id);
   `)
   db.prepare('DELETE FROM web_sessions WHERE expires <= ?').run(Date.now())
-  return db
+  let transactionTail = Promise.resolve()
+  let transactionActive = false
+  let transactionFinished = Promise.resolve()
+  const outsideTransaction = async (operation) => {
+    while (transactionActive) await transactionFinished
+    return operation()
+  }
+
+  return {
+    prepare: db.prepare.bind(db),
+    close: db.close.bind(db),
+    get: (sql, params = []) => outsideTransaction(() => db.prepare(sql).get(...params)),
+    all: (sql, params = []) => outsideTransaction(() => db.prepare(sql).all(...params)),
+    run: (sql, params = []) => outsideTransaction(() => db.prepare(sql).run(...params)),
+    withTransaction: async (callback) => {
+      const previousTransaction = transactionTail
+      let releaseTransaction
+      transactionTail = new Promise((resolve) => { releaseTransaction = resolve })
+      await previousTransaction
+      let finishTransaction
+      let began = false
+      try {
+        db.exec('BEGIN IMMEDIATE')
+        began = true
+        transactionActive = true
+        transactionFinished = new Promise((resolve) => { finishTransaction = resolve })
+        const result = await callback({
+          get: async (sql, params = []) => db.prepare(sql).get(...params),
+          all: async (sql, params = []) => db.prepare(sql).all(...params),
+          run: async (sql, params = []) => db.prepare(sql).run(...params),
+        })
+        db.exec('COMMIT')
+        began = false
+        return result
+      } catch (error) {
+        if (began) db.exec('ROLLBACK')
+        throw error
+      } finally {
+        if (transactionActive) {
+          transactionActive = false
+          finishTransaction()
+        }
+        releaseTransaction()
+      }
+    },
+  }
 }

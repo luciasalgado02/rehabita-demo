@@ -1,7 +1,7 @@
 import readline from 'node:readline/promises'
 import { randomUUID } from 'node:crypto'
 import { stdin, stdout } from 'node:process'
-import { openDatabase } from './db.js'
+import { openConfiguredDatabase } from './configured-db.js'
 import { hashPassword, MIN_PASSWORD_LENGTH } from './passwords.js'
 
 const DNI_PATTERN = /^\d{7,8}$/
@@ -47,12 +47,12 @@ function readHidden(prompt) {
   })
 }
 
-const db = openDatabase()
+const db = openConfiguredDatabase()
 const rl = readline.createInterface({ input: stdin, output: stdout })
 
 try {
-  const existing = db.prepare("SELECT COUNT(*) AS count FROM users WHERE role = 'therapist'").get()
-  if (existing.count > 0) {
+  const existing = await db.get("SELECT COUNT(*) AS count FROM users WHERE role = 'therapist'")
+  if (Number(existing.count) > 0) {
     throw new Error('Ya existe una cuenta de terapeuta; la inicialización solo puede ejecutarse una vez.')
   }
 
@@ -68,11 +68,10 @@ try {
   if (password !== confirmation) throw new Error('Las contraseñas no coinciden.')
 
   const passwordHash = await hashPassword(password)
-  db.prepare("INSERT INTO users (id, dni, password_hash, role) VALUES (?, ?, ?, 'therapist')")
-    .run(randomUUID(), dni, passwordHash)
+  await db.run("INSERT INTO users (id, dni, password_hash, role) VALUES (?, ?, ?, 'therapist')", [randomUUID(), dni, passwordHash])
   stdout.write('Cuenta de terapeuta creada. Guardá las credenciales de forma segura.\n')
 } catch (error) {
-  console.error(error.code === 'SQLITE_CONSTRAINT_UNIQUE'
+  console.error(error.code === 'SQLITE_CONSTRAINT_UNIQUE' || error.code === '23505'
     ? 'Ya existe una cuenta con ese DNI o ya se inicializó la cuenta de terapeuta.'
     : error.message)
   process.exitCode = 1

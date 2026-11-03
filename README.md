@@ -1,6 +1,6 @@
 # ReHabita
 
-Aplicación React con una API Express y persistencia SQLite para cuentas de terapeuta y paciente.
+Aplicación React con API Express, sesiones persistentes y base de datos SQLite para desarrollo local o PostgreSQL en Supabase para el despliegue.
 
 ## Desarrollo local
 
@@ -11,7 +11,7 @@ npm install
 npm run dev
 ```
 
-Vite sirve la aplicación solo en loopback y envía `/api` al servidor local. En desarrollo el servidor genera una clave de sesión aleatoria en memoria al iniciar; las sesiones activas se invalidan al reiniciarlo. La base queda en `.data/rehabita.sqlite` por defecto. Se puede cambiar con `DATABASE_PATH`. El modo de desarrollo usa HTTP; usá datos ficticios únicamente, nunca datos personales ni de salud reales.
+Vite sirve la aplicación solo en loopback y envía `/api` al servidor local. En desarrollo el servidor genera una clave de sesión aleatoria en memoria al iniciar; las sesiones activas se invalidan al reiniciarlo. La base SQLite queda en `.data/rehabita.sqlite` por defecto. Si se define `DATABASE_URL`, la API y el comando de creación de terapeuta usan PostgreSQL. El modo de desarrollo usa HTTP; usá datos ficticios únicamente, nunca datos personales ni de salud reales.
 
 ## Crear la cuenta inicial de terapeuta
 
@@ -28,25 +28,26 @@ La terapeuta puede crear cuentas de paciente después de iniciar sesión. La fic
 ## Producción
 
 1. Compilá la interfaz: `npm run build`.
-2. Configurá `NODE_ENV=production`, `SESSION_SECRET` con al menos 32 caracteres aleatorios, `PORT` y, opcionalmente, `DATABASE_PATH`. Podés generar la clave con `node -e "console.log(require('node:crypto').randomBytes(48).toString('base64url'))"` y establecerla como variable de entorno del proceso o servicio; no la guardes en el repositorio. El archivo `.env.example` es solo una referencia: el proyecto no carga archivos `.env` automáticamente.
+2. Configurá `NODE_ENV=production`, `SESSION_SECRET` con al menos 32 caracteres aleatorios y `DATABASE_URL` con una conexión PostgreSQL privada/pooler. Podés generar la clave con `node -e "console.log(require('node:crypto').randomBytes(48).toString('base64url'))"` y establecerla como variable de entorno del proceso o servicio; no la guardes en el repositorio. El archivo `.env.example` es solo una referencia: el proyecto no carga archivos `.env` automáticamente.
 3. Ejecutá `npm start`.
 4. Usá HTTPS. Si TLS termina en un proxy inverso de confianza, configurá además `TRUST_PROXY=1`.
 5. Ejecutá `npm run create:therapist` en una terminal segura para inicializar la cuenta antes del primer uso.
 
 La cookie de sesión es `HttpOnly`, `SameSite=Lax` y `Secure` en producción. Los cambios requieren un token CSRF de sesión; el inicio de sesión rota la sesión y el cierre de sesión la invalida. Las contraseñas se almacenan con scrypt y sal aleatoria, nunca en texto plano. La API verifica rol en cada operación protegida; los pacientes solo pueden consultar su propia ficha y los ejercicios asignados a su plan. Las credenciales y los roles no se almacenan en el navegador.
 
-La base SQLite contiene datos personales. Protegé el acceso al archivo y a sus respaldos con controles del sistema operativo y cifrado de disco; no publiques `.data/`. Para producción con datos reales de salud, revisar además requisitos legales, política de conservación, copias de seguridad cifradas, monitoreo y seguridad operacional del entorno antes de desplegar.
+La base contiene datos personales. Protegé el acceso a la base y sus respaldos; no publiques `.data/`, `.env` ni cadenas de conexión. Para producción con datos reales de salud, revisar además requisitos legales, política de conservación, copias de seguridad cifradas, monitoreo y seguridad operacional del entorno antes de desplegar.
 
-## Demo de revisión en Vercel + Render
+## Demo de revisión en Vercel + Supabase
 
-El frontend se publica en Vercel y la API Express con SQLite persistente en Render. El `render.yaml` configura un servicio Starter y un disco persistente; no uses un servicio sin disco para la base. `vercel.json` envía las llamadas `/api/*` a `https://rehabita-demo-api.onrender.com`.
+La interfaz y la API Express se publican en el mismo proyecto Vercel. La función `api/[...path].js` ejecuta la API y conserva las rutas `/api/*`; Supabase aloja PostgreSQL, incluidas las cuentas, los pacientes, las asignaciones y las sesiones web. El frontend continúa usando las mismas rutas y no recibe credenciales de base de datos.
 
-1. Importá `luciasalgado02/rehabita-demo` en Vercel y desplegá la rama `main`. El build usa `npm run build` y publica `dist`; anotá el dominio HTTPS asignado.
-2. En Render, creá un Blueprint desde el mismo repositorio y elegí `render.yaml`. Cuando solicite `APP_ORIGIN`, ingresá el origen exacto de Vercel, por ejemplo `https://rehabita-demo.vercel.app`, sin barra final. `SESSION_SECRET` se genera en Render; no lo copies al repositorio ni al frontend.
-3. Esperá que `https://rehabita-demo-api.onrender.com/api/health` responda `{"status":"ok"}` y redeployá Vercel para activar el rewrite al API.
-4. Desde el Shell privado del servicio Render, ejecutá `npm run create:therapist` y definí las credenciales de demostración. Iniciá sesión y creá pacientes de prueba desde «Nuevo paciente». Compartí las credenciales de revisión por un canal privado, no en el repositorio ni en una URL pública.
+1. Creá un proyecto Supabase y ejecutá el SQL de `supabase/migrations/20261103000000_initial_schema.sql` en el SQL Editor del proyecto.
+2. En Supabase, obtené la cadena PostgreSQL del **Transaction Pooler**. En Vercel, importá el repositorio `luciasalgado02/rehabita-demo` y configurá `DATABASE_URL` con esa cadena, `SESSION_SECRET` con un valor aleatorio de al menos 32 caracteres, `APP_ORIGIN` con el origen exacto de producción de Vercel (por ejemplo, `https://rehabita-demo.vercel.app`, sin barra final) y `TRUST_PROXY=1` para que las cookies seguras funcionen detrás del proxy HTTPS. Guardá las variables solo en Vercel, nunca en GitHub ni en variables `VITE_*`.
+3. Desplegá en Vercel. Comprobá que `https://<dominio-vercel>/api/health` responda `{"status":"ok"}`.
+4. Creá la cuenta de demostración de terapeuta ejecutando `npm run create:therapist` en una terminal local segura con `DATABASE_URL` temporalmente configurada con la conexión privada del proyecto. El comando pide las credenciales de forma interactiva y guarda solo el hash de contraseña. No agregues esa cadena a `.env` ni la compartas por chat.
+5. Iniciá sesión como terapeuta, creá una cuenta de paciente ficticia desde «Nuevo paciente» y verificá los dos paneles. Compartí el dominio y las credenciales demo por un canal privado.
 
-El disco Render mantiene `.data` fuera del repositorio. La base local y sus sesiones no se copian: el servicio de revisión inicia vacío para no publicar DNI, hashes de contraseñas ni datos clínicos de la máquina local. Creá cuentas de demostración nuevas en el servicio remoto. El dominio de Vercel será accesible por Internet; compartilo solo con los revisores previstos y usá exclusivamente datos ficticios.
+El despliegue no copia la base local ni sus sesiones: empezará vacío para no publicar DNI, hashes de contraseñas ni datos clínicos de la máquina local. El proyecto de Supabase puede pausarse o tener límites en el plan gratuito; revisá los límites vigentes antes de compartir la demo. El dominio de Vercel será accesible por Internet; usá solo datos ficticios y compartilo con los revisores previstos.
 
 ## Preparado para próximas etapas
 

@@ -12,6 +12,7 @@ dist
 dist-ssr
 *.local
 .data/
+.vercel/
 .env
 .env.*
 !.env.example

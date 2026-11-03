@@ -3,13 +3,13 @@ import express from 'express'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createApiApp } from './app.js'
-import { openDatabase } from './db.js'
+import { openConfiguredDatabase } from './configured-db.js'
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const production = process.env.NODE_ENV === 'production'
 const port = Number(production ? process.env.PORT || 4173 : process.env.API_PORT || 4174)
 const sessionSecret = process.env.SESSION_SECRET || (!production ? randomBytes(48).toString('hex') : undefined)
-const db = openDatabase()
+const db = openConfiguredDatabase()
 const app = createApiApp({ db, sessionSecret, production })
 
 if (production) {
