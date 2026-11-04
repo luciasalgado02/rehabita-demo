@@ -155,10 +155,23 @@ test('therapist creates a linked patient atomically and duplicate DNI is rejecte
   assert.equal(linked.therapist_id, therapistId)
   assert.equal(linked.user_id !== '', true)
   assert.equal(db.prepare('SELECT birth_date FROM patients WHERE id = ?').get(created.body.patient.id).birth_date, '2000-01-01')
+  const createdPatientStatus = await therapistClient('/api/therapist/patients')
+  assert.equal(createdPatientStatus.body.patients.find(({ id }) => id === created.body.patient.id).hasPlan, false)
   const patientDetails = await therapistClient(`/api/therapist/patients/${created.body.patient.id}`)
   assert.equal(patientDetails.status, 200)
   assert.equal(patientDetails.body.patient.birthDate, '2000-01-01')
   assert.equal(typeof patientDetails.body.patient.age, 'number')
+
+  const emptyPlan = await therapistClient(`/api/therapist/patients/${created.body.patient.id}/exercises`, {
+    method: 'PUT',
+    csrfToken: login.body.csrfToken,
+    body: { exerciseIds: [] },
+  })
+  assert.equal(emptyPlan.status, 200)
+  assert.equal(
+    (await therapistClient('/api/therapist/patients')).body.patients.find(({ id }) => id === created.body.patient.id).hasPlan,
+    false
+  )
 
   const exerciseIds = ['hombro-elevacion-hacia-adelante', 'mano-puños']
   const savedPlan = await therapistClient(`/api/therapist/patients/${patientProfileId}/exercises`, {
@@ -168,6 +181,26 @@ test('therapist creates a linked patient atomically and duplicate DNI is rejecte
   })
   assert.equal(savedPlan.status, 200)
   assert.deepEqual(savedPlan.body.exerciseIds, exerciseIds)
+  assert.equal(
+    (await therapistClient('/api/therapist/patients')).body.patients.find(({ id }) => id === patientProfileId).hasPlan,
+    true
+  )
+  const removedPlan = await therapistClient(`/api/therapist/patients/${patientProfileId}/exercises`, {
+    method: 'PUT',
+    csrfToken: login.body.csrfToken,
+    body: { exerciseIds: [] },
+  })
+  assert.equal(removedPlan.status, 200)
+  assert.equal(
+    (await therapistClient('/api/therapist/patients')).body.patients.find(({ id }) => id === patientProfileId).hasPlan,
+    false
+  )
+  const restoredPlan = await therapistClient(`/api/therapist/patients/${patientProfileId}/exercises`, {
+    method: 'PUT',
+    csrfToken: login.body.csrfToken,
+    body: { exerciseIds },
+  })
+  assert.deepEqual(restoredPlan.body.exerciseIds, exerciseIds)
   assert.deepEqual(
     db.prepare(`
       SELECT plan_exercises.exercise_id AS id

@@ -342,7 +342,8 @@ export function createApiApp({ db, sessionSecret, production = false } = {}) {
       SELECT patients.id, patients.first_name AS firstName, patients.last_name AS lastName,
         patients.birth_date AS birthDate, patients.created_at AS createdAt,
         EXISTS (
-          SELECT 1 FROM plans
+          SELECT 1 FROM plan_exercises
+          JOIN plans ON plans.id = plan_exercises.plan_id
           WHERE plans.patient_id = patients.id AND plans.therapist_id = patients.therapist_id
         ) AS hasPlan
       FROM patients

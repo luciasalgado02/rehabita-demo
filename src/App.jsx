@@ -342,6 +342,9 @@ function TherapistWorkspace({ onLogout }) {
         `/api/therapist/patients/${encodeURIComponent(patientId)}/exercises`,
         { method: 'PUT', body: { exerciseIds: nextIds } }
       )
+      setPatients((current) => current.map((patient) =>
+        patient.id === patientId ? { ...patient, hasPlan: result.exerciseIds.length > 0 } : patient
+      ))
       if (planPatientIdRef.current === patientId) setExerciseIds(result.exerciseIds)
     } catch (requestError) {
       if (planPatientIdRef.current === patientId) {
@@ -563,8 +566,8 @@ function TherapistWorkspace({ onLogout }) {
                               aria-pressed={planPatientId === patient.id}
                             >
                               <span><strong>{patient.firstName} {patient.lastName}</strong>{patient.age !== null && <small>{patient.age} años</small>}</span>
-                              <span className={patient.hasPlan ? 'plan-status has-plan' : 'plan-status'}>
-                                {patient.hasPlan ? 'Planificado' : 'Sin plan'}
+                              <span className={patient.hasPlan ? 'plan-status has-plan' : 'plan-status missing-plan'}>
+                                {patient.hasPlan ? 'Planificado' : 'Falta planificación'}
                               </span>
                             </button>
                           </li>

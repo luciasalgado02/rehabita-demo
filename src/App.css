@@ -264,6 +264,7 @@
 .planning-patient-option small { color: var(--muted); font-size: calc(12px * var(--text-scale, 1)); }
 .plan-status { flex: 0 0 auto; padding: 5px 9px; border-radius: 999px; color: var(--muted); background: #f0f4f3; font-size: calc(11px * var(--text-scale, 1)); font-weight: 600; }
 .plan-status.has-plan { color: var(--mint-dark); background: var(--mint-pale); }
+.plan-status.missing-plan { color: #806622; background: #fff4d8; }
 .patient-selected-mark { width: 24px; height: 24px; display: grid; place-items: center; border-radius: 50%; color: white; background: var(--mint-dark); font-size: 14px; font-weight: 700; }
 .no-patient-results { padding: 14px; color: var(--muted); font-size: calc(14px * var(--text-scale, 1)); }
 .planning-empty .text-action { margin-top: 6px; }
@@ -307,6 +308,7 @@
 .dark-mode .patient-delete-button:hover, .dark-mode .patient-delete-button:focus-visible { background: #493735; }
 .dark-mode .plan-status { color: var(--muted); background: #29403f; }
 .dark-mode .plan-status.has-plan { color: #a8e6db; background: #31524c; }
+.dark-mode .plan-status.missing-plan { color: #f2d58b; background: #51472e; }
 .dark-mode .delete-confirmation { border-color: var(--line); background: #203333; }
 .dark-mode .delete-confirm-button { color: #ffd2cc; border-color: #94625b; background: #493735; }
 .dark-mode .delete-cancel-button { color: var(--ink); border-color: var(--line); background: #29403f; }
