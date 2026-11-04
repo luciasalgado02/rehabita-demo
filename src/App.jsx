@@ -14,9 +14,16 @@ function App() {
   const [showLogin, setShowLogin] = useState(false)
   const [showHelp, setShowHelp] = useState(false)
   const [showAbout, setShowAbout] = useState(false)
-  const [fontSize, setFontSize] = useState('normal')
+  const [fontSize, setFontSize] = useState(() => {
+    const savedFontSize = window.localStorage.getItem('rehabita-font-size')
+    return ['normal', 'large', 'extra-large'].includes(savedFontSize) ? savedFontSize : 'normal'
+  })
   const [darkMode, setDarkMode] = useState(false)
   const [highContrast, setHighContrast] = useState(false)
+
+  useEffect(() => {
+    window.localStorage.setItem('rehabita-font-size', fontSize)
+  }, [fontSize])
 
   useEffect(() => {
     apiRequest('/api/auth/me')
