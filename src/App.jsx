@@ -5,6 +5,9 @@ import { apiRequest, getCsrfToken } from './api'
 import ExerciseCategories from './ExerciseCategories'
 import './App.css'
 
+const FONT_SIZE_KEY = 'rehabita-font-size'
+const FONT_SIZES = ['normal', 'large', 'extra-large']
+
 function App() {
   const [activeView, setActiveView] = useState('inicio')
   const [selectedExercise, setSelectedExercise] = useState(null)
@@ -14,9 +17,16 @@ function App() {
   const [showLogin, setShowLogin] = useState(false)
   const [showHelp, setShowHelp] = useState(false)
   const [showAbout, setShowAbout] = useState(false)
-  const [fontSize, setFontSize] = useState('normal')
+  const [fontSize, setFontSize] = useState(() => {
+    const savedFontSize = window.localStorage.getItem(FONT_SIZE_KEY)
+    return FONT_SIZES.includes(savedFontSize) ? savedFontSize : 'normal'
+  })
   const [darkMode, setDarkMode] = useState(false)
   const [highContrast, setHighContrast] = useState(false)
+
+  useEffect(() => {
+    window.localStorage.setItem(FONT_SIZE_KEY, fontSize)
+  }, [fontSize])
 
   useEffect(() => {
     apiRequest('/api/auth/me')
