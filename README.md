@@ -51,7 +51,7 @@ El despliegue no copia la base local ni sus sesiones: empezará vacío para no p
 
 ## Preparado para próximas etapas
 
-La terapeuta puede consultar la ficha de sus pacientes, crear cuentas y asignar ejercicios desde las mismas categorías de la lista de ejercicios. Cada asignación y sus parámetros opcionales (repeticiones, series, velocidad y descanso) se persisten en el plan individual del paciente; el acceso se verifica en la API y en la interfaz. Al eliminar un paciente se borran su cuenta, ficha y planificación en una transacción. Si existen registros de sesiones, la eliminación se rechaza para preservar el historial clínico hasta que haya una política de retención definida. La demostración del movimiento sigue en mantenimiento hasta que se incorpore el avatar.
+La terapeuta puede consultar la ficha de sus pacientes, crear cuentas y asignar ejercicios desde las mismas categorías de la lista de ejercicios. Cada asignación y sus parámetros opcionales (repeticiones, series, velocidad y descanso) se persisten en el plan individual del paciente; el acceso se verifica en la API y en la interfaz. Al eliminar un paciente se borran su cuenta, ficha y planificación en una transacción. Si existen registros de sesiones, la eliminación se rechaza para preservar el historial clínico hasta que haya una política de retención definida. La primera reproducción de ejercicio usa el video MP4 `public/videos/ejercicios/elevacion-hacia-adelante-hombros.mp4`; las demás animaciones se incorporarán cuando existan sus archivos.
 
 ## Verificación
 

@@ -3,6 +3,8 @@ import { CalendarDays, ClipboardList, Clock3, HeartPulse, LogOut, MapPin, Search
 import { canGuestAccessExercise } from './exerciseAccess'
 import { apiRequest, getCsrfToken } from './api'
 import ExerciseCategories from './ExerciseCategories'
+import ExercisePlayer from './ExercisePlayer'
+import { exerciseAnimations } from './exerciseAnimations'
 import TherapistAgenda from './TherapistAgenda'
 import './App.css'
 
@@ -898,7 +900,7 @@ function PatientWorkspace({ user, onLogout }) {
   const openAssignedExercise = async (exercise) => {
     setError('')
     try {
-      const { exercise: result } = await apiRequest(`/api/patient/exercises/${encodeURIComponent(exercise.id)}`)
+      const result = await apiRequest(`/api/patient/exercises/${encodeURIComponent(exercise.id)}`)
       setSelectedExercise(result)
     } catch (requestError) {
       setError(requestError.message)
@@ -914,7 +916,20 @@ function PatientWorkspace({ user, onLogout }) {
   }
 
   if (selectedExercise) {
-    return <section className="patient-exercise-view"><ExerciseDetailView exercise={selectedExercise} onBack={() => setSelectedExercise(null)} /></section>
+    return (
+      <section className="patient-exercise-view">
+        {exerciseAnimations[selectedExercise.exercise.id] ? (
+          <ExercisePlayer
+            exercise={selectedExercise.exercise}
+            configuration={selectedExercise.configuration}
+            onBack={() => setSelectedExercise(null)}
+            onFinish={() => setSelectedExercise(null)}
+          />
+        ) : (
+          <ExerciseDetailView exercise={selectedExercise.exercise} onBack={() => setSelectedExercise(null)} />
+        )}
+      </section>
+    )
   }
 
   return (
