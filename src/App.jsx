@@ -72,7 +72,11 @@ function App() {
       return <main className={`home-shell font-${fontSize}${darkMode ? ' dark-mode' : ''}${highContrast ? ' high-contrast' : ''}`}><GuestModesView onBack={() => goTo('inicio')} onStart={openExercise} onLogin={() => setShowLogin(true)} openCategory={openCategory} setOpenCategory={setOpenCategory} /></main>
     }
 
-    return <main className={`maintenance-shell font-${fontSize}${darkMode ? ' dark-mode' : ''}${highContrast ? ' high-contrast' : ''}`}><ExerciseDetailView exercise={selectedExercise} onBack={() => goTo('modos')} /></main>
+    const exercisePlayer = exerciseAnimations[selectedExercise.id]
+      ? <ExercisePlayer exercise={selectedExercise} configuration={null} onBack={() => goTo('modos')} onFinish={() => goTo('modos')} />
+      : <ExerciseDetailView exercise={selectedExercise} onBack={() => goTo('modos')} />
+
+    return <main className={`maintenance-shell font-${fontSize}${darkMode ? ' dark-mode' : ''}${highContrast ? ' high-contrast' : ''}`}>{exercisePlayer}</main>
   }
 
   if (activeView === 'therapist' && authenticatedUser?.role === 'therapist') {
