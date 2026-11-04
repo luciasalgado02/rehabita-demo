@@ -223,6 +223,7 @@ function TherapistWorkspace({ onLogout }) {
   const [isDeleting, setIsDeleting] = useState(false)
   const planPatientIdRef = useRef(planPatientId)
   const [patientSearch, setPatientSearch] = useState('')
+  const [patientListSearch, setPatientListSearch] = useState('')
   const [exerciseIds, setExerciseIds] = useState([])
   const [exerciseConfigurations, setExerciseConfigurations] = useState({})
   const [configuringExercise, setConfiguringExercise] = useState(null)
@@ -432,6 +433,9 @@ function TherapistWorkspace({ onLogout }) {
   const filteredPatients = patients.filter((patient) =>
     `${patient.firstName} ${patient.lastName}`.toLocaleLowerCase().includes(patientSearch.trim().toLocaleLowerCase())
   )
+  const filteredRegisteredPatients = patients.filter((patient) =>
+    `${patient.firstName} ${patient.lastName}`.toLocaleLowerCase().includes(patientListSearch.trim().toLocaleLowerCase())
+  )
 
   return (
     <section className="therapist-layout">
@@ -492,16 +496,32 @@ function TherapistWorkspace({ onLogout }) {
                     <section className="workspace-card">
                       <h2>Pacientes registrados</h2>
                       {isLoading ? <p>Cargando pacientes…</p> : patients.length ? (
-                        <ul className="patient-list patient-list-scroll">
-                          {patients.map((patient) => (
-                            <li key={patient.id}>
-                              <button type="button" className="patient-list-button" onClick={() => openPatient(patient)}>
-                                <span><strong>{patient.firstName} {patient.lastName}</strong>{patient.age !== null && <small>{patient.age} años</small>}</span>
-                                <span aria-hidden="true">›</span>
-                              </button>
-                            </li>
-                          ))}
-                        </ul>
+                        <>
+                          <label className="patient-search">
+                            <Search aria-hidden="true" />
+                            <span className="sr-only">Buscar paciente registrado por nombre o apellido</span>
+                            <input
+                              type="search"
+                              placeholder="Buscar paciente por nombre o apellido..."
+                              value={patientListSearch}
+                              onChange={(event) => setPatientListSearch(event.target.value)}
+                            />
+                          </label>
+                          {filteredRegisteredPatients.length ? (
+                            <ul className="patient-list patient-list-scroll">
+                              {filteredRegisteredPatients.map((patient) => (
+                                <li key={patient.id}>
+                                  <button type="button" className="patient-list-button" onClick={() => openPatient(patient)}>
+                                    <span><strong>{patient.firstName} {patient.lastName}</strong>{patient.age !== null && <small>{patient.age} años</small>}</span>
+                                    <span aria-hidden="true">›</span>
+                                  </button>
+                                </li>
+                              ))}
+                            </ul>
+                          ) : (
+                            <p className="no-patient-results" role="status">No se encontraron pacientes</p>
+                          )}
+                        </>
                       ) : <p>Aún no hay pacientes registrados.</p>}
                     </section>
                   </>
