@@ -1,13 +1,16 @@
 import { canGuestAccessExercise } from './exerciseAccess'
 import { exerciseCategories } from '../shared/exercises'
+import { Settings2 } from 'lucide-react'
 
 export default function ExerciseCategories({
   mode = 'guest',
   openCategory,
   setOpenCategory,
   selectedExerciseIds = [],
+  exerciseConfigurations = {},
   onSelectExercise,
   onToggleExercise,
+  onConfigureExercise,
   disabled = false,
 }) {
   return (
@@ -57,9 +60,13 @@ export default function ExerciseCategories({
                         mode === 'selection' && isSelected ? 'selected' : '',
                         !isAvailable ? 'restricted' : '',
                       ].filter(Boolean).join(' ')
+                      const configuration = exerciseConfigurations[item.id]
+                      const configurationSummary = configuration
+                        ? `${configuration.repetitions} repeticiones · ${configuration.series} series · Velocidad ${configuration.speed} · Descanso ${configuration.restSeconds} s`
+                        : ''
 
                       return (
-                        <li key={item.id}>
+                        <li key={item.id} className={mode === 'selection' ? 'exercise-entry configurable' : 'exercise-entry'}>
                           <button
                             type="button"
                             className={className}
@@ -71,9 +78,24 @@ export default function ExerciseCategories({
                             aria-pressed={mode === 'selection' ? isSelected : undefined}
                             aria-label={`${item.name}: ${label}`}
                           >
-                            <span>{item.name}</span>
-                            <small>{label}</small>
+                            <span className="exercise-option-content">
+                              <span>{item.name}</span>
+                              <small>{mode === 'selection' && configuration ? 'Configurado' : label}</small>
+                            </span>
                           </button>
+                          {mode === 'selection' && (
+                            <button
+                              type="button"
+                              className="exercise-configure-button"
+                              onClick={() => onConfigureExercise(item)}
+                              disabled={disabled || !isSelected}
+                              aria-label={`Configurar ${item.name}`}
+                            >
+                              <Settings2 aria-hidden="true" />
+                              Configurar
+                            </button>
+                          )}
+                          {configuration && <p className="exercise-configuration-summary">{configurationSummary}</p>}
                         </li>
                       )
                     })}

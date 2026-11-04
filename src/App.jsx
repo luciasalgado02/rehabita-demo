@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { CalendarDays, ClipboardList, Clock3, HeartPulse, LogOut, MapPin, Search, UserRoundPlus, UsersRound } from 'lucide-react'
+import { CalendarDays, ClipboardList, Clock3, HeartPulse, LogOut, MapPin, Search, UserRoundPlus, UsersRound, X } from 'lucide-react'
 import { canGuestAccessExercise } from './exerciseAccess'
 import { apiRequest, getCsrfToken } from './api'
 import ExerciseCategories from './ExerciseCategories'
@@ -224,6 +224,8 @@ function TherapistWorkspace({ onLogout }) {
   const planPatientIdRef = useRef(planPatientId)
   const [patientSearch, setPatientSearch] = useState('')
   const [exerciseIds, setExerciseIds] = useState([])
+  const [exerciseConfigurations, setExerciseConfigurations] = useState({})
+  const [configuringExercise, setConfiguringExercise] = useState(null)
   const [planLoadedFor, setPlanLoadedFor] = useState(null)
   const [openCategory, setOpenCategory] = useState(null)
 
@@ -266,9 +268,12 @@ function TherapistWorkspace({ onLogout }) {
     if (activeSection !== 'planning' || !planPatientId) return undefined
     let active = true
     apiRequest(`/api/therapist/patients/${encodeURIComponent(planPatientId)}/exercises`)
-      .then(({ exerciseIds: result }) => {
+      .then(({ exerciseIds: result, configurations }) => {
         if (active) {
           setExerciseIds(result)
+          setExerciseConfigurations(Object.fromEntries(
+            (configurations || []).map((configuration) => [configuration.exerciseId, configuration])
+          ))
           setPlanLoadedFor(planPatientId)
         }
       })
@@ -279,6 +284,7 @@ function TherapistWorkspace({ onLogout }) {
           if (requestError.status === 404) {
             selectPlanPatientId('')
             setExerciseIds([])
+            setExerciseConfigurations({})
           }
         }
       })
@@ -301,6 +307,8 @@ function TherapistWorkspace({ onLogout }) {
     setSelectedPatient(patient)
     setActiveSection('planning')
     setExerciseIds([])
+    setExerciseConfigurations({})
+    setConfiguringExercise(null)
     setPlanLoadedFor(null)
     setError('')
     setOpenCategory(null)
@@ -345,11 +353,39 @@ function TherapistWorkspace({ onLogout }) {
       setPatients((current) => current.map((patient) =>
         patient.id === patientId ? { ...patient, hasPlan: result.exerciseIds.length > 0 } : patient
       ))
-      if (planPatientIdRef.current === patientId) setExerciseIds(result.exerciseIds)
+      if (planPatientIdRef.current === patientId) {
+        setExerciseIds(result.exerciseIds)
+        if (previousIds.includes(exercise.id)) {
+          setExerciseConfigurations((current) => {
+            const next = { ...current }
+            delete next[exercise.id]
+            return next
+          })
+        }
+      }
     } catch (requestError) {
       if (planPatientIdRef.current === patientId) {
         setExerciseIds(previousIds)
         setError(requestError.message)
+      }
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  const saveExerciseConfiguration = async (configuration) => {
+    if (!configuringExercise || !exerciseIds.includes(configuringExercise.id)) return
+    const patientId = planPatientId
+    const exercise = configuringExercise
+    setIsSaving(true)
+    try {
+      const { configuration: savedConfiguration } = await apiRequest(
+        `/api/therapist/patients/${encodeURIComponent(patientId)}/exercises/${encodeURIComponent(exercise.id)}/configuration`,
+        { method: 'PUT', body: configuration }
+      )
+      if (planPatientIdRef.current === patientId) {
+        setExerciseConfigurations((current) => ({ ...current, [exercise.id]: savedConfiguration }))
+        setConfiguringExercise(null)
       }
     } finally {
       setIsSaving(false)
@@ -368,6 +404,7 @@ function TherapistWorkspace({ onLogout }) {
       if (planPatientIdRef.current === patient.id) {
         selectPlanPatientId('')
         setExerciseIds([])
+        setExerciseConfigurations({})
         setPlanLoadedFor(null)
       }
       setActiveSection('patients')
@@ -407,7 +444,7 @@ function TherapistWorkspace({ onLogout }) {
           <button type="button" className={activeSection === 'new-patient' ? 'nav-item active' : 'nav-item'} onClick={() => { setActiveSection('new-patient'); setError(''); setMessage('') }}>
             <UserRoundPlus aria-hidden="true" /> Nuevo paciente
           </button>
-          <button type="button" className={activeSection === 'planning' ? 'nav-item active' : 'nav-item'} onClick={() => { selectPlanPatientId(''); setExerciseIds([]); setPlanLoadedFor(null); setActiveSection('planning'); setError('') }}>
+          <button type="button" className={activeSection === 'planning' ? 'nav-item active' : 'nav-item'} onClick={() => { selectPlanPatientId(''); setExerciseIds([]); setExerciseConfigurations({}); setConfiguringExercise(null); setPlanLoadedFor(null); setActiveSection('planning'); setError('') }}>
             <ClipboardList aria-hidden="true" /> Planificación
           </button>
           <button type="button" className={activeSection === 'agenda' ? 'nav-item active' : 'nav-item'} onClick={() => { setActiveSection('agenda'); setError('') }}>
@@ -498,6 +535,8 @@ function TherapistWorkspace({ onLogout }) {
                         onClick={() => {
                           selectPlanPatientId('')
                           setExerciseIds([])
+                          setExerciseConfigurations({})
+                          setConfiguringExercise(null)
                           setPlanLoadedFor(null)
                           setOpenCategory(null)
                           setError('')
@@ -519,7 +558,9 @@ function TherapistWorkspace({ onLogout }) {
                               openCategory={openCategory}
                               setOpenCategory={setOpenCategory}
                               selectedExerciseIds={exerciseIds}
+                              exerciseConfigurations={exerciseConfigurations}
                               onToggleExercise={toggleExercise}
+                              onConfigureExercise={setConfiguringExercise}
                               disabled={isSaving}
                             />
                           )}
@@ -559,6 +600,8 @@ function TherapistWorkspace({ onLogout }) {
                               onClick={() => {
                                 selectPlanPatientId(patient.id)
                                 setExerciseIds([])
+                                setExerciseConfigurations({})
+                                setConfiguringExercise(null)
                                 setPlanLoadedFor(null)
                                 setOpenCategory(null)
                                 setError('')
@@ -592,6 +635,15 @@ function TherapistWorkspace({ onLogout }) {
           isDeleting={isDeleting}
           onCancel={() => { if (!isDeleting) setDeleteConfirmationPatient(null) }}
           onConfirm={deletePatient}
+        />
+      )}
+      {configuringExercise && (
+        <ExerciseConfigurationModal
+          exercise={configuringExercise}
+          configuration={exerciseConfigurations[configuringExercise.id] || null}
+          isSaving={isSaving}
+          onCancel={() => { if (!isSaving) setConfiguringExercise(null) }}
+          onSave={saveExerciseConfiguration}
         />
       )}
     </section>
@@ -637,6 +689,122 @@ function DeletePatientModal({ patient, isDeleting, onCancel, onConfirm }) {
   )
 }
 
+function ExerciseConfigurationModal({ exercise, configuration, isSaving, onCancel, onSave }) {
+  const [form, setForm] = useState(() => ({
+    repetitions: configuration?.repetitions?.toString() || '',
+    series: configuration?.series?.toString() || '',
+    speed: configuration?.speed || '',
+    restSeconds: configuration?.restSeconds?.toString() || '',
+  }))
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape' && !isSaving) onCancel()
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [isSaving, onCancel])
+
+  const submit = async (event) => {
+    event.preventDefault()
+    setError('')
+    try {
+      await onSave({
+        repetitions: Number(form.repetitions),
+        series: Number(form.series),
+        speed: form.speed,
+        restSeconds: Number(form.restSeconds),
+      })
+    } catch (requestError) {
+      setError(requestError.message || 'No se pudo guardar la configuración.')
+    }
+  }
+
+  return (
+    <div
+      className="modal-backdrop exercise-configuration-backdrop"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !isSaving) onCancel()
+      }}
+    >
+      <section
+        className="exercise-configuration-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="exercise-configuration-title"
+        aria-describedby="exercise-configuration-name"
+      >
+        <button type="button" className="exercise-configuration-close" onClick={onCancel} disabled={isSaving} aria-label="Cancelar y cerrar">
+          <X aria-hidden="true" />
+        </button>
+        <p className="eyebrow">PLANIFICACIÓN DEL EJERCICIO</p>
+        <h2 id="exercise-configuration-title">Configurar ejercicio</h2>
+        <p className="exercise-configuration-name" id="exercise-configuration-name">{exercise.name}</p>
+        <form className="exercise-configuration-form" onSubmit={submit}>
+          <label>
+            Repeticiones
+            <input
+              type="number"
+              min="1"
+              max="1000"
+              step="1"
+              required
+              autoFocus
+              value={form.repetitions}
+              onChange={(event) => setForm((current) => ({ ...current, repetitions: event.target.value }))}
+            />
+          </label>
+          <label>
+            Series
+            <input
+              type="number"
+              min="1"
+              max="100"
+              step="1"
+              required
+              value={form.series}
+              onChange={(event) => setForm((current) => ({ ...current, series: event.target.value }))}
+            />
+          </label>
+          <label>
+            Velocidad
+            <select
+              required
+              value={form.speed}
+              onChange={(event) => setForm((current) => ({ ...current, speed: event.target.value }))}
+            >
+              <option value="" disabled>Seleccioná una velocidad</option>
+              <option value="lenta">Lenta</option>
+              <option value="media">Media</option>
+              <option value="rápida">Rápida</option>
+            </select>
+          </label>
+          <label>
+            Descanso entre series (segundos)
+            <input
+              type="number"
+              min="0"
+              max="3600"
+              step="1"
+              required
+              value={form.restSeconds}
+              onChange={(event) => setForm((current) => ({ ...current, restSeconds: event.target.value }))}
+            />
+          </label>
+          {error && <p className="form-message error-message" role="alert">{error}</p>}
+          <div className="exercise-configuration-actions">
+            <button type="submit" className="primary-button" disabled={isSaving}>
+              {isSaving ? 'Guardando…' : 'Guardar cambios'}
+            </button>
+            <button type="button" className="delete-cancel-button" onClick={onCancel} disabled={isSaving}>Cancelar</button>
+          </div>
+        </form>
+      </section>
+    </div>
+  )
+}
+
 function PatientCreationForm({ form, setForm, isSaving, onSubmit }) {
   const updateForm = (field) => (event) => setForm({ ...form, [field]: event.target.value })
   return (
@@ -658,6 +826,7 @@ function PatientCreationForm({ form, setForm, isSaving, onSubmit }) {
 function PatientWorkspace({ user, onLogout }) {
   const [patient, setPatient] = useState(null)
   const [exerciseIds, setExerciseIds] = useState([])
+  const [exerciseConfigurations, setExerciseConfigurations] = useState({})
   const [upcomingAppointment, setUpcomingAppointment] = useState(null)
   const [appointmentError, setAppointmentError] = useState('')
   const [selectedExercise, setSelectedExercise] = useState(null)
@@ -673,7 +842,12 @@ function PatientWorkspace({ user, onLogout }) {
 
   useEffect(() => {
     apiRequest('/api/patient/exercises')
-      .then(({ exerciseIds: result }) => setExerciseIds(result))
+      .then(({ exerciseIds: result, configurations }) => {
+        setExerciseIds(result)
+        setExerciseConfigurations(Object.fromEntries(
+          (configurations || []).map((configuration) => [configuration.exerciseId, configuration])
+        ))
+      })
       .catch((requestError) => setError(requestError.message))
   }, [])
 
@@ -750,6 +924,7 @@ function PatientWorkspace({ user, onLogout }) {
               openCategory={openCategory}
               setOpenCategory={setOpenCategory}
               selectedExerciseIds={exerciseIds}
+              exerciseConfigurations={exerciseConfigurations}
               onSelectExercise={openAssignedExercise}
             />
           ) : <p>Tu terapeuta todavía no asignó ejercicios.</p>}

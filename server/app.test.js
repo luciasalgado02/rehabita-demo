@@ -228,8 +228,103 @@ test('therapist creates a linked patient atomically and duplicate DNI is rejecte
   })
   assert.deepEqual(savedSecondPatientPlan.body.exerciseIds, ['antebrazo-supinacion'])
   assert.deepEqual(
+    (await therapistClient(`/api/therapist/patients/${patientProfileId}/exercises`)).body.configurations,
+    []
+  )
+  const secondPatientExpandedPlan = await therapistClient(`/api/therapist/patients/${created.body.patient.id}/exercises`, {
+    method: 'PUT',
+    csrfToken: login.body.csrfToken,
+    body: { exerciseIds: ['antebrazo-supinacion', 'hombro-elevacion-hacia-adelante'] },
+  })
+  assert.deepEqual(secondPatientExpandedPlan.body.exerciseIds, ['antebrazo-supinacion', 'hombro-elevacion-hacia-adelante'])
+  let firstPatientConfiguration = {
+    repetitions: 10,
+    series: 2,
+    speed: 'lenta',
+    restSeconds: 30,
+  }
+  const saveFirstPatientConfiguration = await therapistClient(
+    `/api/therapist/patients/${patientProfileId}/exercises/hombro-elevacion-hacia-adelante/configuration`,
+    {
+      method: 'PUT',
+      csrfToken: login.body.csrfToken,
+      body: firstPatientConfiguration,
+    }
+  )
+  assert.equal(saveFirstPatientConfiguration.status, 200)
+  assert.deepEqual(saveFirstPatientConfiguration.body.configuration, {
+    exerciseId: 'hombro-elevacion-hacia-adelante',
+    ...firstPatientConfiguration,
+  })
+  firstPatientConfiguration = { ...firstPatientConfiguration, repetitions: 12, speed: 'rápida' }
+  const updateFirstPatientConfiguration = await therapistClient(
+    `/api/therapist/patients/${patientProfileId}/exercises/hombro-elevacion-hacia-adelante/configuration`,
+    {
+      method: 'PUT',
+      csrfToken: login.body.csrfToken,
+      body: firstPatientConfiguration,
+    }
+  )
+  assert.deepEqual(updateFirstPatientConfiguration.body.configuration, {
+    exerciseId: 'hombro-elevacion-hacia-adelante',
+    ...firstPatientConfiguration,
+  })
+  const secondPatientConfiguration = {
+    repetitions: 15,
+    series: 3,
+    speed: 'media',
+    restSeconds: 45,
+  }
+  const saveSecondPatientConfiguration = await therapistClient(
+    `/api/therapist/patients/${created.body.patient.id}/exercises/hombro-elevacion-hacia-adelante/configuration`,
+    {
+      method: 'PUT',
+      csrfToken: login.body.csrfToken,
+      body: secondPatientConfiguration,
+    }
+  )
+  assert.equal(saveSecondPatientConfiguration.status, 200)
+  const invalidConfiguration = await therapistClient(
+    `/api/therapist/patients/${patientProfileId}/exercises/hombro-elevacion-hacia-adelante/configuration`,
+    {
+      method: 'PUT',
+      csrfToken: login.body.csrfToken,
+      body: { ...firstPatientConfiguration, repetitions: 0 },
+    }
+  )
+  assert.equal(invalidConfiguration.status, 400)
+  const unassignedConfiguration = await therapistClient(
+    `/api/therapist/patients/${patientProfileId}/exercises/antebrazo-supinacion/configuration`,
+    {
+      method: 'PUT',
+      csrfToken: login.body.csrfToken,
+      body: firstPatientConfiguration,
+    }
+  )
+  assert.equal(unassignedConfiguration.status, 409)
+  const firstPatientReloadedConfiguration = await therapistClient(`/api/therapist/patients/${patientProfileId}/exercises`)
+  assert.deepEqual(firstPatientReloadedConfiguration.body.configurations, [{
+    exerciseId: 'hombro-elevacion-hacia-adelante',
+    ...firstPatientConfiguration,
+  }])
+  const secondPatientReloadedConfiguration = await therapistClient(`/api/therapist/patients/${created.body.patient.id}/exercises`)
+  assert.deepEqual(secondPatientReloadedConfiguration.body.configurations, [{
+    exerciseId: 'hombro-elevacion-hacia-adelante',
+    ...secondPatientConfiguration,
+  }])
+  const retainedConfiguration = await therapistClient(`/api/therapist/patients/${patientProfileId}/exercises`, {
+    method: 'PUT',
+    csrfToken: login.body.csrfToken,
+    body: { exerciseIds: ['hombro-elevacion-hacia-adelante'] },
+  })
+  assert.deepEqual(retainedConfiguration.body.exerciseIds, ['hombro-elevacion-hacia-adelante'])
+  assert.deepEqual(
+    (await therapistClient(`/api/therapist/patients/${patientProfileId}/exercises`)).body.configurations,
+    [{ exerciseId: 'hombro-elevacion-hacia-adelante', ...firstPatientConfiguration }]
+  )
+  assert.deepEqual(
     (await therapistClient(`/api/therapist/patients/${patientProfileId}/exercises`)).body.exerciseIds,
-    [...exerciseIds].sort()
+    ['hombro-elevacion-hacia-adelante']
   )
   const patientRows = await therapistClient('/api/therapist/patients')
   assert.equal(patientRows.body.patients.find(({ id }) => id === patientProfileId).hasPlan, true)
@@ -256,11 +351,28 @@ test('therapist creates a linked patient atomically and duplicate DNI is rejecte
   })
   const patientPlan = await patientClient('/api/patient/exercises')
   assert.equal(patientPlan.status, 200)
-  assert.deepEqual(patientPlan.body.exerciseIds, [...exerciseIds].sort())
+  assert.deepEqual(patientPlan.body.exerciseIds, ['hombro-elevacion-hacia-adelante'])
   const assignedExercise = await patientClient('/api/patient/exercises/hombro-elevacion-hacia-adelante')
   assert.equal(assignedExercise.status, 200)
+  assert.deepEqual(assignedExercise.body.configuration, {
+    exerciseId: 'hombro-elevacion-hacia-adelante',
+    ...firstPatientConfiguration,
+  })
+  assert.deepEqual(patientPlan.body.configurations, [{
+    exerciseId: 'hombro-elevacion-hacia-adelante',
+    ...firstPatientConfiguration,
+  }])
   const unassignedExercise = await patientClient('/api/patient/exercises/antebrazo-supinacion')
   assert.equal(unassignedExercise.status, 403)
+  const deniedConfiguration = await patientClient(
+    `/api/therapist/patients/${patientProfileId}/exercises/hombro-elevacion-hacia-adelante/configuration`,
+    {
+      method: 'PUT',
+      csrfToken: patientLogin.body.csrfToken,
+      body: secondPatientConfiguration,
+    }
+  )
+  assert.equal(deniedConfiguration.status, 403)
 
   const deniedCreate = await patientClient('/api/therapist/patients', {
     method: 'POST',
@@ -294,6 +406,27 @@ test('therapist creates a linked patient atomically and duplicate DNI is rejecte
   assert.equal(historyProtectedDelete.status, 409)
   assert.ok(db.prepare('SELECT id FROM patients WHERE id = ?').get(created.body.patient.id))
   assert.ok(db.prepare('SELECT id FROM plans WHERE id = ?').get(patientPlanId))
+
+  assert.equal(
+    (await therapistClient(`/api/therapist/patients/${created.body.patient.id}/exercises`)).body.configurations.length,
+    1
+  )
+  const removeConfiguredExercise = await therapistClient(`/api/therapist/patients/${patientProfileId}/exercises`, {
+    method: 'PUT',
+    csrfToken: login.body.csrfToken,
+    body: [],
+  })
+  assert.equal(removeConfiguredExercise.status, 400)
+  const removeConfiguredPlan = await therapistClient(`/api/therapist/patients/${patientProfileId}/exercises`, {
+    method: 'PUT',
+    csrfToken: login.body.csrfToken,
+    body: { exerciseIds: [] },
+  })
+  assert.equal(removeConfiguredPlan.status, 200)
+  assert.deepEqual(
+    (await therapistClient(`/api/therapist/patients/${patientProfileId}/exercises`)).body.configurations,
+    []
+  )
 
   const deletePatient = await therapistClient(`/api/therapist/patients/${patientProfileId}`, {
     method: 'DELETE',

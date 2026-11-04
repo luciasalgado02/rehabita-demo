@@ -7,6 +7,7 @@ import { exercisesById } from '../shared/exercises.js'
 
 const DNI_PATTERN = /^\d{7,8}$/
 const APPOINTMENT_COLORS = new Set(['#cdeee6', '#dbeafe', '#fce7c8', '#eadcf8', '#f8d7da'])
+const EXERCISE_SPEEDS = new Set(['lenta', 'media', 'rápida'])
 const SESSION_MAX_AGE = 8 * 60 * 60 * 1000
 const dummyHash = `scrypt$32768$8$1$${randomBytes(16).toString('hex')}$${scryptSync(randomBytes(32), 'rehabita-invalid-account-salt', 64, { N: 32768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 }).toString('hex')}`
 
@@ -54,6 +55,13 @@ function isValidAppointmentInput(body) {
     typeof body.color === 'string' && APPOINTMENT_COLORS.has(body.color) &&
     (body.observations === undefined || body.observations === null ||
       typeof body.observations === 'string' && body.observations.length <= 2000)
+}
+
+function isValidExerciseConfiguration(body) {
+  return body && Number.isInteger(body.repetitions) && body.repetitions >= 1 && body.repetitions <= 1000 &&
+    Number.isInteger(body.series) && body.series >= 1 && body.series <= 100 &&
+    typeof body.speed === 'string' && EXERCISE_SPEEDS.has(body.speed) &&
+    Number.isInteger(body.restSeconds) && body.restSeconds >= 0 && body.restSeconds <= 3600
 }
 
 function getAge(birthDate) {
@@ -233,6 +241,22 @@ export function createApiApp({ db, sessionSecret, production = false } = {}) {
       ORDER BY plan_exercises.exercise_id
     `, [patientId])
     return rows.map(({ id }) => id)
+  }
+
+  async function getPlanExerciseConfigurations(patientId, therapistId) {
+    const rows = await db.all(`
+      SELECT plan_exercises.exercise_id AS exerciseId,
+        plan_exercises.repetitions AS repetitions,
+        plan_exercises.series AS series,
+        plan_exercises.speed AS speed,
+        plan_exercises.rest_seconds AS restSeconds
+      FROM plan_exercises
+      JOIN plans ON plans.id = plan_exercises.plan_id
+      WHERE plans.patient_id = ? AND plans.therapist_id = COALESCE(?, plans.therapist_id)
+        AND plan_exercises.repetitions IS NOT NULL
+      ORDER BY plan_exercises.exercise_id
+    `, [patientId, therapistId ?? null])
+    return rows
   }
 
   app.get('/api/auth/csrf', (req, res, next) => {
@@ -580,7 +604,10 @@ export function createApiApp({ db, sessionSecret, production = false } = {}) {
       res.status(404).json({ error: 'No se encontró el paciente solicitado.' })
       return
     }
-    res.json({ exerciseIds: await getPlanExerciseIds(patient.id) })
+    res.json({
+      exerciseIds: await getPlanExerciseIds(patient.id),
+      configurations: await getPlanExerciseConfigurations(patient.id, req.user.id),
+    })
   })
 
   app.put('/api/therapist/patients/:patientId/exercises', requireCsrf, requireRole('therapist'), async (req, res) => {
@@ -598,13 +625,63 @@ export function createApiApp({ db, sessionSecret, production = false } = {}) {
 
     await db.withTransaction(async (tx) => {
       const planId = await getOrCreatePatientPlan(tx, patient.id, req.user.id)
-      await tx.run('DELETE FROM plan_exercises WHERE plan_id = ?', [planId])
+      if (exerciseIds.length) {
+        const placeholders = exerciseIds.map(() => '?').join(', ')
+        await tx.run(
+          `DELETE FROM plan_exercises WHERE plan_id = ? AND exercise_id NOT IN (${placeholders})`,
+          [planId, ...exerciseIds]
+        )
+      } else {
+        await tx.run('DELETE FROM plan_exercises WHERE plan_id = ?', [planId])
+      }
       for (const exerciseId of exerciseIds) {
-        await tx.run('INSERT INTO plan_exercises (plan_id, exercise_id) VALUES (?, ?)', [planId, exerciseId])
+        await tx.run(
+          'INSERT INTO plan_exercises (plan_id, exercise_id) VALUES (?, ?) ON CONFLICT (plan_id, exercise_id) DO NOTHING',
+          [planId, exerciseId]
+        )
       }
       await tx.run("UPDATE plans SET updated_at = datetime('now') WHERE id = ?", [planId])
     })
     res.json({ exerciseIds })
+  })
+
+  app.put('/api/therapist/patients/:patientId/exercises/:exerciseId/configuration', requireCsrf, requireRole('therapist'), async (req, res) => {
+    const patient = await getTherapistPatient(req.params.patientId, req.user.id)
+    if (!patient) {
+      res.status(404).json({ error: 'No se encontró el paciente solicitado.' })
+      return
+    }
+    if (!exercisesById.has(req.params.exerciseId) || !isValidExerciseConfiguration(req.body)) {
+      res.status(400).json({ error: 'Revisá los parámetros del ejercicio.' })
+      return
+    }
+
+    const updated = await db.withTransaction(async (tx) => {
+      const plan = await tx.get(
+        'SELECT id FROM plans WHERE patient_id = ? AND therapist_id = ? ORDER BY created_at, id LIMIT 1',
+        [patient.id, req.user.id]
+      )
+      if (!plan) return false
+      const result = await tx.run(`
+        UPDATE plan_exercises
+        SET repetitions = ?, series = ?, speed = ?, rest_seconds = ?
+        WHERE plan_id = ? AND exercise_id = ?
+      `, [
+        req.body.repetitions,
+        req.body.series,
+        req.body.speed,
+        req.body.restSeconds,
+        plan.id,
+        req.params.exerciseId,
+      ])
+      if (result.changes) await tx.run("UPDATE plans SET updated_at = datetime('now') WHERE id = ?", [plan.id])
+      return result.changes > 0
+    })
+    if (!updated) {
+      res.status(409).json({ error: 'Primero asigná este ejercicio al paciente.' })
+      return
+    }
+    res.json({ configuration: { exerciseId: req.params.exerciseId, ...req.body } })
   })
 
   app.post('/api/therapist/patients', requireCsrf, requireRole('therapist'), async (req, res, next) => {
@@ -693,7 +770,10 @@ export function createApiApp({ db, sessionSecret, production = false } = {}) {
       return
     }
     const exerciseIds = await getPlanExerciseIds(patient.id)
-    res.json({ exerciseIds })
+    res.json({
+      exerciseIds,
+      configurations: await getPlanExerciseConfigurations(patient.id),
+    })
   })
 
   app.get('/api/patient/exercises/:exerciseId', requireRole('patient'), async (req, res) => {
@@ -711,7 +791,9 @@ export function createApiApp({ db, sessionSecret, production = false } = {}) {
       res.status(403).json({ error: 'Este ejercicio no está incluido en tu planificación.' })
       return
     }
-    res.json({ exercise })
+    const configuration = (await getPlanExerciseConfigurations(patient.id))
+      .find((item) => item.exerciseId === exercise.id) || null
+    res.json({ exercise, configuration })
   })
 
   app.use('/api', (req, res) => {

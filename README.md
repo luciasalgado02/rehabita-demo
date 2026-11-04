@@ -41,7 +41,7 @@ La base contiene datos personales. Protegé el acceso a la base y sus respaldos;
 
 La interfaz y la API Express se publican en el mismo proyecto Vercel. La función `api/[...path].js` ejecuta la API y conserva las rutas `/api/*`; Supabase aloja PostgreSQL, incluidas las cuentas, los pacientes, las asignaciones y las sesiones web. El frontend continúa usando las mismas rutas y no recibe credenciales de base de datos.
 
-1. Creá un proyecto Supabase y ejecutá, en orden, los SQL de `supabase/migrations/20261103000000_initial_schema.sql` y `supabase/migrations/20261104000000_agenda.sql` en el SQL Editor del proyecto.
+1. Creá un proyecto Supabase y ejecutá, en orden, los SQL de `supabase/migrations/20261103000000_initial_schema.sql`, `supabase/migrations/20261104000000_agenda.sql` y `supabase/migrations/20261104170000_exercise_configuration.sql` en el SQL Editor del proyecto.
 2. En Supabase, obtené la cadena PostgreSQL del **Transaction Pooler**. En Vercel, importá el repositorio `luciasalgado02/rehabita-demo` y configurá `DATABASE_URL` con esa cadena, `SESSION_SECRET` con un valor aleatorio de al menos 32 caracteres y `TRUST_PROXY=1` para que las cookies seguras funcionen detrás del proxy HTTPS. `APP_ORIGIN` es opcional; si se configura, debe ser el origen exacto (por ejemplo `https://rehabita-demo.vercel.app`, sin barra final). Guardá las variables solo en Vercel, nunca en GitHub ni en variables `VITE_*`.
 3. Desplegá en Vercel. Comprobá que `https://<dominio-vercel>/api/health` responda `{"status":"ok"}`.
 4. Creá la cuenta de demostración de terapeuta ejecutando `npm run create:therapist` en una terminal local segura con `DATABASE_URL` temporalmente configurada con la conexión privada del proyecto. El comando pide las credenciales de forma interactiva y guarda solo el hash de contraseña. No agregues esa cadena a `.env` ni la compartas por chat.
@@ -51,7 +51,7 @@ El despliegue no copia la base local ni sus sesiones: empezará vacío para no p
 
 ## Preparado para próximas etapas
 
-La terapeuta puede consultar la ficha de sus pacientes, crear cuentas y asignar ejercicios desde las mismas categorías de la lista de ejercicios. Cada asignación se persiste en el plan individual del paciente; el acceso del paciente se verifica en la API y en la interfaz. Al eliminar un paciente se borran su cuenta, ficha y planificación en una transacción. Si existen registros de sesiones, la eliminación se rechaza para preservar el historial clínico hasta que haya una política de retención definida. La demostración del movimiento sigue en mantenimiento hasta que se incorpore el avatar.
+La terapeuta puede consultar la ficha de sus pacientes, crear cuentas y asignar ejercicios desde las mismas categorías de la lista de ejercicios. Cada asignación y sus parámetros opcionales (repeticiones, series, velocidad y descanso) se persisten en el plan individual del paciente; el acceso se verifica en la API y en la interfaz. Al eliminar un paciente se borran su cuenta, ficha y planificación en una transacción. Si existen registros de sesiones, la eliminación se rechaza para preservar el historial clínico hasta que haya una política de retención definida. La demostración del movimiento sigue en mantenimiento hasta que se incorpore el avatar.
 
 ## Verificación
 

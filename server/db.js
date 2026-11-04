@@ -45,6 +45,10 @@ export function openDatabase(filename = process.env.DATABASE_PATH || path.join(p
     CREATE TABLE IF NOT EXISTS plan_exercises (
       plan_id TEXT NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
       exercise_id TEXT NOT NULL,
+      repetitions INTEGER,
+      series INTEGER,
+      speed TEXT,
+      rest_seconds INTEGER,
       PRIMARY KEY (plan_id, exercise_id)
     );
 
@@ -85,6 +89,17 @@ export function openDatabase(filename = process.env.DATABASE_PATH || path.join(p
     CREATE INDEX IF NOT EXISTS appointments_therapist_date_idx ON appointments(therapist_id, appointment_date, start_time);
     CREATE INDEX IF NOT EXISTS appointments_patient_idx ON appointments(patient_id);
   `)
+  const planExerciseColumns = new Set(db.prepare('PRAGMA table_info(plan_exercises)').all().map(({ name }) => name))
+  for (const [name, type] of [
+    ['repetitions', 'INTEGER'],
+    ['series', 'INTEGER'],
+    ['speed', 'TEXT'],
+    ['rest_seconds', 'INTEGER'],
+  ]) {
+    if (!planExerciseColumns.has(name)) {
+      db.exec(`ALTER TABLE plan_exercises ADD COLUMN ${name} ${type}`)
+    }
+  }
   db.prepare('DELETE FROM web_sessions WHERE expires <= ?').run(Date.now())
   let transactionTail = Promise.resolve()
   let transactionActive = false
