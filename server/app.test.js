@@ -253,6 +253,183 @@ test('therapist creates a linked patient atomically and duplicate DNI is rejecte
   )
 })
 
+test('therapists create, view, update, and delete appointments with validation and conflict protection', async () => {
+  const therapistClient = createClient()
+  const csrf = await therapistClient('/api/auth/csrf')
+  const login = await therapistClient('/api/auth/login', {
+    method: 'POST',
+    csrfToken: csrf.body.csrfToken,
+    body: { dni: therapistDni, password, role: 'therapist' },
+  })
+  assert.equal(login.status, 200)
+
+  const patientPassword = 'another-secure-patient-password'
+  const patientCreated = await therapistClient('/api/therapist/patients', {
+    method: 'POST',
+    csrfToken: login.body.csrfToken,
+    body: {
+      firstName: 'Ana',
+      lastName: 'Agenda',
+      dni: '00911111',
+      password: patientPassword,
+    },
+  })
+  assert.equal(patientCreated.status, 201)
+  const appointmentPatientId = patientCreated.body.patient.id
+
+  const range = '/api/therapist/appointments?from=2026-11-01&to=2026-11-30'
+  assert.equal((await therapistClient('/api/therapist/appointments')).status, 400)
+  assert.equal((await therapistClient('/api/therapist/appointments?from=2026-02-30&to=2026-03-01')).status, 400)
+  assert.deepEqual((await therapistClient(range)).body.appointments, [])
+
+  const baseAppointment = {
+    patientId: appointmentPatientId,
+    date: '2026-11-05',
+    startTime: '10:00',
+    endTime: '11:00',
+    color: '#cdeee6',
+    observations: 'Control de movilidad',
+  }
+  const invalidDate = await therapistClient('/api/therapist/appointments', {
+    method: 'POST',
+    csrfToken: login.body.csrfToken,
+    body: { ...baseAppointment, date: '2026-02-30' },
+  })
+  assert.equal(invalidDate.status, 400)
+
+  const invalidColor = await therapistClient('/api/therapist/appointments', {
+    method: 'POST',
+    csrfToken: login.body.csrfToken,
+    body: { ...baseAppointment, color: 'url(javascript:alert(1))' },
+  })
+  assert.equal(invalidColor.status, 400)
+
+  const unknownPatient = await therapistClient('/api/therapist/appointments', {
+    method: 'POST',
+    csrfToken: login.body.csrfToken,
+    body: { ...baseAppointment, patientId: randomUUID() },
+  })
+  assert.equal(unknownPatient.status, 404)
+
+  const created = await therapistClient('/api/therapist/appointments', {
+    method: 'POST',
+    csrfToken: login.body.csrfToken,
+    body: baseAppointment,
+  })
+  assert.equal(created.status, 201)
+  assert.equal(created.body.appointment.patientId, appointmentPatientId)
+  assert.equal(created.body.appointment.patientFirstName, 'Ana')
+  assert.equal(created.body.appointment.observations, 'Control de movilidad')
+
+  const otherOwnerAppointmentId = randomUUID()
+  const patientAccountId = db.prepare('SELECT user_id AS id FROM patients WHERE id = ?').get(appointmentPatientId).id
+  db.prepare(`
+    INSERT INTO appointments
+      (id, therapist_id, patient_id, appointment_date, start_time, end_time, color)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(otherOwnerAppointmentId, patientAccountId, appointmentPatientId, '2026-11-05', '12:00', '12:30', '#dbeafe')
+  const ownerScopedList = await therapistClient('/api/therapist/appointments?from=2026-11-05&to=2026-11-05')
+  assert.deepEqual(ownerScopedList.body.appointments.map(({ id }) => id), [created.body.appointment.id])
+
+  const foreignUpdate = await therapistClient(`/api/therapist/appointments/${otherOwnerAppointmentId}`, {
+    method: 'PUT',
+    csrfToken: login.body.csrfToken,
+    body: baseAppointment,
+  })
+  assert.equal(foreignUpdate.status, 404)
+  const foreignDelete = await therapistClient(`/api/therapist/appointments/${otherOwnerAppointmentId}`, {
+    method: 'DELETE',
+    csrfToken: login.body.csrfToken,
+  })
+  assert.equal(foreignDelete.status, 404)
+
+  const overlapping = await therapistClient('/api/therapist/appointments', {
+    method: 'POST',
+    csrfToken: login.body.csrfToken,
+    body: { ...baseAppointment, startTime: '10:30', endTime: '11:30' },
+  })
+  assert.equal(overlapping.status, 409)
+
+  const adjacent = await therapistClient('/api/therapist/appointments', {
+    method: 'POST',
+    csrfToken: login.body.csrfToken,
+    body: { ...baseAppointment, startTime: '11:00', endTime: '11:30' },
+  })
+  assert.equal(adjacent.status, 201)
+
+  const concurrentAppointments = await Promise.all(['Eva', 'Lucía'].map((observations) =>
+    therapistClient('/api/therapist/appointments', {
+      method: 'POST',
+      csrfToken: login.body.csrfToken,
+      body: { ...baseAppointment, date: '2026-11-06', startTime: '09:00', endTime: '10:00', observations },
+    })
+  ))
+  assert.deepEqual(concurrentAppointments.map(({ status }) => status).sort(), [201, 409])
+
+  const conflictingUpdate = await therapistClient(`/api/therapist/appointments/${created.body.appointment.id}`, {
+    method: 'PUT',
+    csrfToken: login.body.csrfToken,
+    body: { ...baseAppointment, startTime: '10:30', endTime: '11:15' },
+  })
+  assert.equal(conflictingUpdate.status, 409)
+
+  const updated = await therapistClient(`/api/therapist/appointments/${created.body.appointment.id}`, {
+    method: 'PUT',
+    csrfToken: login.body.csrfToken,
+    body: { ...baseAppointment, date: '2026-11-07', startTime: '13:15', endTime: '14:00', color: '#eadcf8', observations: '' },
+  })
+  assert.equal(updated.status, 200)
+  assert.equal(updated.body.appointment.date, '2026-11-07')
+  assert.equal(updated.body.appointment.color, '#eadcf8')
+  assert.equal(updated.body.appointment.observations, '')
+
+  const reloaded = await therapistClient('/api/therapist/appointments?from=2026-11-07&to=2026-11-07')
+  assert.equal(reloaded.body.appointments.length, 1)
+  assert.equal(reloaded.body.appointments[0].id, created.body.appointment.id)
+
+  assert.equal((await therapistClient('/api/auth/logout', {
+    method: 'POST',
+    csrfToken: login.body.csrfToken,
+  })).status, 204)
+  const returningTherapist = createClient()
+  const returningCsrf = await returningTherapist('/api/auth/csrf')
+  const returningLogin = await returningTherapist('/api/auth/login', {
+    method: 'POST',
+    csrfToken: returningCsrf.body.csrfToken,
+    body: { dni: therapistDni, password, role: 'therapist' },
+  })
+  assert.equal(returningLogin.status, 200)
+  const afterNewSession = await returningTherapist('/api/therapist/appointments?from=2026-11-07&to=2026-11-07')
+  assert.equal(afterNewSession.body.appointments[0].id, created.body.appointment.id)
+
+  const unknownAppointment = await returningTherapist(`/api/therapist/appointments/${randomUUID()}`, {
+    method: 'DELETE',
+    csrfToken: returningLogin.body.csrfToken,
+  })
+  assert.equal(unknownAppointment.status, 404)
+
+  const deleted = await returningTherapist(`/api/therapist/appointments/${created.body.appointment.id}`, {
+    method: 'DELETE',
+    csrfToken: returningLogin.body.csrfToken,
+  })
+  assert.equal(deleted.status, 204)
+  assert.equal((await returningTherapist('/api/therapist/appointments?from=2026-11-07&to=2026-11-07')).body.appointments.length, 0)
+
+  const patientClient = createClient()
+  const patientCsrf = await patientClient('/api/auth/csrf')
+  const patientLogin = await patientClient('/api/auth/login', {
+    method: 'POST',
+    csrfToken: patientCsrf.body.csrfToken,
+    body: { dni: '00911111', password: patientPassword, role: 'patient' },
+  })
+  assert.equal((await patientClient(range)).status, 403)
+  assert.equal((await patientClient('/api/therapist/appointments', {
+    method: 'POST',
+    csrfToken: patientLogin.body.csrfToken,
+    body: baseAppointment,
+  })).status, 403)
+})
+
 test('requires a strong production session secret and enforces a single therapist account', () => {
   assert.throws(() => createApiApp({ db, production: true }), /SESSION_SECRET/)
   assert.throws(

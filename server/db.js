@@ -56,6 +56,20 @@ export function openDatabase(filename = process.env.DATABASE_PATH || path.join(p
       ended_at TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS appointments (
+      id TEXT PRIMARY KEY,
+      therapist_id TEXT NOT NULL REFERENCES users(id),
+      patient_id TEXT NOT NULL REFERENCES patients(id) ON DELETE CASCADE,
+      appointment_date TEXT NOT NULL,
+      start_time TEXT NOT NULL,
+      end_time TEXT NOT NULL,
+      color TEXT NOT NULL,
+      observations TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      CHECK (start_time < end_time)
+    );
+
     CREATE TABLE IF NOT EXISTS web_sessions (
       sid TEXT PRIMARY KEY,
       sess TEXT NOT NULL,
@@ -68,6 +82,8 @@ export function openDatabase(filename = process.env.DATABASE_PATH || path.join(p
     CREATE INDEX IF NOT EXISTS plans_patient_idx ON plans(patient_id);
     CREATE INDEX IF NOT EXISTS plan_exercises_id_idx ON plan_exercises(exercise_id);
     CREATE INDEX IF NOT EXISTS session_records_patient_idx ON session_records(patient_id);
+    CREATE INDEX IF NOT EXISTS appointments_therapist_date_idx ON appointments(therapist_id, appointment_date, start_time);
+    CREATE INDEX IF NOT EXISTS appointments_patient_idx ON appointments(patient_id);
   `)
   db.prepare('DELETE FROM web_sessions WHERE expires <= ?').run(Date.now())
   let transactionTail = Promise.resolve()
@@ -100,6 +116,7 @@ export function openDatabase(filename = process.env.DATABASE_PATH || path.join(p
           get: async (sql, params = []) => db.prepare(sql).get(...params),
           all: async (sql, params = []) => db.prepare(sql).all(...params),
           run: async (sql, params = []) => db.prepare(sql).run(...params),
+          lockTherapist: async () => {},
         })
         db.exec('COMMIT')
         began = false

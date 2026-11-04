@@ -6,6 +6,7 @@ import { hashPassword, MIN_PASSWORD_LENGTH, verifyPassword } from './passwords.j
 import { exercisesById } from '../shared/exercises.js'
 
 const DNI_PATTERN = /^\d{7,8}$/
+const APPOINTMENT_COLORS = new Set(['#cdeee6', '#dbeafe', '#fce7c8', '#eadcf8', '#f8d7da'])
 const SESSION_MAX_AGE = 8 * 60 * 60 * 1000
 const dummyHash = `scrypt$32768$8$1$${randomBytes(16).toString('hex')}$${scryptSync(randomBytes(32), 'rehabita-invalid-account-salt', 64, { N: 32768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 }).toString('hex')}`
 
@@ -19,6 +20,23 @@ function isValidBirthDate(value) {
   const date = new Date(`${value}T00:00:00.000Z`)
   return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value &&
     value <= new Date().toISOString().slice(0, 10)
+}
+
+function isCalendarDate(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
+  const date = new Date(`${value}T00:00:00.000Z`)
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value
+}
+
+function isValidAppointmentInput(body) {
+  return body && typeof body.patientId === 'string' && body.patientId.length > 0 &&
+    isCalendarDate(body.date) &&
+    typeof body.startTime === 'string' && /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(body.startTime) &&
+    typeof body.endTime === 'string' && /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(body.endTime) &&
+    body.startTime < body.endTime &&
+    typeof body.color === 'string' && APPOINTMENT_COLORS.has(body.color) &&
+    (body.observations === undefined || body.observations === null ||
+      typeof body.observations === 'string' && body.observations.length <= 2000)
 }
 
 function getAge(birthDate) {
@@ -321,6 +339,170 @@ export function createApiApp({ db, sessionSecret, production = false } = {}) {
         hasPlan: Boolean(patient.hasPlan),
       })),
     })
+  })
+
+  app.get('/api/therapist/appointments', requireRole('therapist'), async (req, res) => {
+    const { from, to } = req.query
+    const spanDays = isCalendarDate(from) && isCalendarDate(to)
+      ? (Date.parse(`${to}T00:00:00.000Z`) - Date.parse(`${from}T00:00:00.000Z`)) / 86_400_000
+      : Number.NaN
+    if (!Number.isInteger(spanDays) || spanDays < 0 || spanDays > 62) {
+      res.status(400).json({ error: 'Seleccioná un período válido de hasta 63 días.' })
+      return
+    }
+
+    const appointments = await db.all(`
+      SELECT appointments.id, appointments.patient_id AS patientId,
+        appointments.appointment_date AS date, appointments.start_time AS startTime,
+        appointments.end_time AS endTime, appointments.color,
+        appointments.observations, appointments.created_at AS createdAt,
+        appointments.updated_at AS updatedAt,
+        patients.first_name AS patientFirstName, patients.last_name AS patientLastName
+      FROM appointments
+      JOIN patients ON patients.id = appointments.patient_id
+      WHERE appointments.therapist_id = ? AND appointments.appointment_date >= ? AND appointments.appointment_date <= ?
+      ORDER BY appointments.appointment_date, appointments.start_time, appointments.id
+    `, [req.user.id, from, to])
+    res.json({ appointments })
+  })
+
+  app.post('/api/therapist/appointments', requireCsrf, requireRole('therapist'), async (req, res, next) => {
+    if (!isValidAppointmentInput(req.body)) {
+      res.status(400).json({ error: 'Revisá los datos de la cita, el horario, el color y las observaciones.' })
+      return
+    }
+
+    try {
+      const result = await db.withTransaction(async (tx) => {
+        await tx.lockTherapist(req.user.id)
+        const patient = await tx.get(
+          'SELECT id FROM patients WHERE id = ? AND therapist_id = ?',
+          [req.body.patientId, req.user.id]
+        )
+        if (!patient) return { error: 'patient-not-found' }
+        const conflict = await tx.get(`
+          SELECT id FROM appointments
+          WHERE therapist_id = ? AND appointment_date = ? AND start_time < ? AND end_time > ?
+          LIMIT 1
+        `, [req.user.id, req.body.date, req.body.endTime, req.body.startTime])
+        if (conflict) return { error: 'conflict' }
+
+        const appointmentId = randomUUID()
+        await tx.run(`
+          INSERT INTO appointments
+            (id, therapist_id, patient_id, appointment_date, start_time, end_time, color, observations)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `, [
+          appointmentId, req.user.id, patient.id, req.body.date, req.body.startTime,
+          req.body.endTime, req.body.color, (req.body.observations || '').trim(),
+        ])
+        return { appointment: await tx.get(`
+          SELECT appointments.id, appointments.patient_id AS patientId,
+            appointments.appointment_date AS date, appointments.start_time AS startTime,
+            appointments.end_time AS endTime, appointments.color,
+            appointments.observations, appointments.created_at AS createdAt,
+            appointments.updated_at AS updatedAt,
+            patients.first_name AS patientFirstName, patients.last_name AS patientLastName
+          FROM appointments JOIN patients ON patients.id = appointments.patient_id
+          WHERE appointments.id = ? AND appointments.therapist_id = ?
+        `, [appointmentId, req.user.id]) }
+      })
+      if (result.error === 'patient-not-found') {
+        res.status(404).json({ error: 'Seleccioná un paciente de tu lista.' })
+        return
+      }
+      if (result.error === 'conflict') {
+        res.status(409).json({ error: 'Ese horario se superpone con otra cita. Elegí otro horario.' })
+        return
+      }
+      res.status(201).json({ appointment: result.appointment })
+    } catch (error) {
+      next(error)
+    }
+  })
+
+  app.put('/api/therapist/appointments/:appointmentId', requireCsrf, requireRole('therapist'), async (req, res, next) => {
+    if (!isValidAppointmentInput(req.body)) {
+      res.status(400).json({ error: 'Revisá los datos de la cita, el horario, el color y las observaciones.' })
+      return
+    }
+
+    try {
+      const result = await db.withTransaction(async (tx) => {
+        await tx.lockTherapist(req.user.id)
+        const appointment = await tx.get(
+          'SELECT id FROM appointments WHERE id = ? AND therapist_id = ?',
+          [req.params.appointmentId, req.user.id]
+        )
+        if (!appointment) return { error: 'not-found' }
+        const patient = await tx.get(
+          'SELECT id FROM patients WHERE id = ? AND therapist_id = ?',
+          [req.body.patientId, req.user.id]
+        )
+        if (!patient) return { error: 'patient-not-found' }
+        const conflict = await tx.get(`
+          SELECT id FROM appointments
+          WHERE therapist_id = ? AND appointment_date = ? AND start_time < ? AND end_time > ? AND id <> ?
+          LIMIT 1
+        `, [req.user.id, req.body.date, req.body.endTime, req.body.startTime, appointment.id])
+        if (conflict) return { error: 'conflict' }
+
+        await tx.run(`
+          UPDATE appointments
+          SET patient_id = ?, appointment_date = ?, start_time = ?, end_time = ?,
+            color = ?, observations = ?, updated_at = datetime('now')
+          WHERE id = ? AND therapist_id = ?
+        `, [
+          patient.id, req.body.date, req.body.startTime, req.body.endTime,
+          req.body.color, (req.body.observations || '').trim(), appointment.id, req.user.id,
+        ])
+        return { appointment: await tx.get(`
+          SELECT appointments.id, appointments.patient_id AS patientId,
+            appointments.appointment_date AS date, appointments.start_time AS startTime,
+            appointments.end_time AS endTime, appointments.color,
+            appointments.observations, appointments.created_at AS createdAt,
+            appointments.updated_at AS updatedAt,
+            patients.first_name AS patientFirstName, patients.last_name AS patientLastName
+          FROM appointments JOIN patients ON patients.id = appointments.patient_id
+          WHERE appointments.id = ? AND appointments.therapist_id = ?
+        `, [appointment.id, req.user.id]) }
+      })
+      if (result.error === 'not-found') {
+        res.status(404).json({ error: 'No se encontró la cita solicitada.' })
+        return
+      }
+      if (result.error === 'patient-not-found') {
+        res.status(404).json({ error: 'Seleccioná un paciente de tu lista.' })
+        return
+      }
+      if (result.error === 'conflict') {
+        res.status(409).json({ error: 'Ese horario se superpone con otra cita. Elegí otro horario.' })
+        return
+      }
+      res.json({ appointment: result.appointment })
+    } catch (error) {
+      next(error)
+    }
+  })
+
+  app.delete('/api/therapist/appointments/:appointmentId', requireCsrf, requireRole('therapist'), async (req, res, next) => {
+    try {
+      const deleted = await db.withTransaction(async (tx) => {
+        await tx.lockTherapist(req.user.id)
+        const result = await tx.run(
+          'DELETE FROM appointments WHERE id = ? AND therapist_id = ?',
+          [req.params.appointmentId, req.user.id]
+        )
+        return result.changes > 0
+      })
+      if (!deleted) {
+        res.status(404).json({ error: 'No se encontró la cita solicitada.' })
+        return
+      }
+      res.status(204).end()
+    } catch (error) {
+      next(error)
+    }
   })
 
   app.get('/api/therapist/patients/:patientId', requireRole('therapist'), async (req, res) => {

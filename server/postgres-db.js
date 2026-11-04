@@ -39,7 +39,12 @@ export function openPostgresDatabase(connectionString = process.env.DATABASE_URL
       const client = await sharedPool.connect()
       try {
         await client.query('BEGIN')
-        const result = await callback(queryMethods(client))
+        const result = await callback({
+          ...queryMethods(client),
+          lockTherapist: async (therapistId) => {
+            await client.query('SELECT id FROM users WHERE id = $1 FOR UPDATE', [therapistId])
+          },
+        })
         await client.query('COMMIT')
         return result
       } catch (error) {

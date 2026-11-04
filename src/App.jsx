@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import { ClipboardList, HeartPulse, LogOut, Search, UserRoundPlus, UsersRound } from 'lucide-react'
+import { CalendarDays, ClipboardList, HeartPulse, LogOut, Search, UserRoundPlus, UsersRound } from 'lucide-react'
 import { canGuestAccessExercise } from './exerciseAccess'
 import { apiRequest, getCsrfToken } from './api'
 import ExerciseCategories from './ExerciseCategories'
+import TherapistAgenda from './TherapistAgenda'
 import './App.css'
 
 function App() {
@@ -406,6 +407,9 @@ function TherapistWorkspace({ onLogout }) {
           <button type="button" className={activeSection === 'planning' ? 'nav-item active' : 'nav-item'} onClick={() => { selectPlanPatientId(''); setExerciseIds([]); setPlanLoadedFor(null); setActiveSection('planning'); setError('') }}>
             <ClipboardList aria-hidden="true" /> Planificación
           </button>
+          <button type="button" className={activeSection === 'agenda' ? 'nav-item active' : 'nav-item'} onClick={() => { setActiveSection('agenda'); setError('') }}>
+            <CalendarDays aria-hidden="true" /> Agenda
+          </button>
         </nav>
         <button type="button" className="therapist-logout" onClick={logout}><LogOut aria-hidden="true" /> Cerrar sesión</button>
       </aside>
@@ -571,6 +575,10 @@ function TherapistWorkspace({ onLogout }) {
                   </div>
                 )}
               </>
+            )}
+
+            {activeSection === 'agenda' && (
+              <TherapistAgenda patients={patients} isLoadingPatients={isLoading} />
             )}
           </div>
         )}
