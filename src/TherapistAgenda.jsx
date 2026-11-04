@@ -478,7 +478,7 @@ function AppointmentDialog({
                 onChange={(event) => onPatientQueryChange(event.target.value)}
               />
               {selectedPatient && <span className="agenda-selected-patient">Seleccionado: {selectedPatient.firstName} {selectedPatient.lastName}</span>}
-              {showPatientOptions && (
+              {showPatientOptions && patientQuery.trim() && (
                 <ul className="agenda-patient-options" id="agenda-patient-options" role="listbox" aria-label="Pacientes encontrados">
                   {matchingPatients.map((patient) => (
                     <li key={patient.id} role="presentation">
@@ -502,14 +502,7 @@ function AppointmentDialog({
               )}
             </div>
 
-            <div className="agenda-form-row">
-              <label>Fecha<input type="date" required value={draft.date} onChange={(event) => setDraft((current) => ({ ...current, date: event.target.value }))} /></label>
-              <label>Color
-                <select value={draft.color} onChange={(event) => setDraft((current) => ({ ...current, color: event.target.value }))}>
-                  {COLORS.map((color) => <option key={color.value} value={color.value}>{color.label}</option>)}
-                </select>
-              </label>
-            </div>
+            <label>Fecha<input type="date" required value={draft.date} onChange={(event) => setDraft((current) => ({ ...current, date: event.target.value }))} /></label>
             <div className="agenda-form-row agenda-time-row">
               <label>Hora de inicio<input type="time" required value={draft.startTime} onChange={(event) => setDraft((current) => ({ ...current, startTime: event.target.value }))} /></label>
               <label>Hora de finalización<input type="time" required value={draft.endTime} onChange={(event) => setDraft((current) => ({ ...current, endTime: event.target.value }))} /></label>

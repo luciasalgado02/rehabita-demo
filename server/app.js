@@ -690,6 +690,16 @@ export function createApiApp({ db, sessionSecret, production = false } = {}) {
       res.status(400).json({ error: 'La solicitud no tiene un formato válido.' })
       return
     }
+    const appointmentsTableMissing =
+      (error?.code === '42P01' && /appointments/i.test(error.message || '')) ||
+      (error?.code === 'SQLITE_ERROR' && /no such table:\s*appointments/i.test(error.message || ''))
+    if (appointmentsTableMissing) {
+      console.error('Agenda database migration is missing: 20261104000000_agenda.sql')
+      res.status(503).json({
+        error: 'La agenda todavía no está habilitada en la base de datos. Aplicá la migración 20261104000000_agenda.sql en Supabase e intentá nuevamente.',
+      })
+      return
+    }
     console.error('API request failed:', error?.name || 'Unknown error')
     res.status(500).json({ error: 'Ocurrió un error. Intentá nuevamente.' })
   })
