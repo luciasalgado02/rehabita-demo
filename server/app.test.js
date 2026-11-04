@@ -55,6 +55,33 @@ function createClient() {
   }
 }
 
+function getArgentinaDateTime() {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Argentina/Buenos_Aires',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(new Date())
+  const values = Object.fromEntries(parts.map(({ type, value }) => [type, value]))
+  return {
+    date: `${values.year}-${values.month}-${values.day}`,
+    time: `${values.hour}:${values.minute}`,
+  }
+}
+
+function shiftArgentinaDateTime({ date, time }, offsetMinutes) {
+  const [year, month, day] = date.split('-').map(Number)
+  const [hour, minute] = time.split(':').map(Number)
+  const shifted = new Date(Date.UTC(year, month - 1, day, hour, minute + offsetMinutes))
+  return {
+    date: shifted.toISOString().slice(0, 10),
+    time: shifted.toISOString().slice(11, 16),
+  }
+}
+
 test('authenticates role-specific accounts and protects therapist and patient operations', async () => {
   const client = createClient()
 
@@ -428,6 +455,110 @@ test('therapists create, view, update, and delete appointments with validation a
     csrfToken: patientLogin.body.csrfToken,
     body: baseAppointment,
   })).status, 403)
+})
+
+test('patients can only see their nearest future appointment and it follows appointment changes', async () => {
+  const therapistClient = createClient()
+  const csrf = await therapistClient('/api/auth/csrf')
+  const login = await therapistClient('/api/auth/login', {
+    method: 'POST',
+    csrfToken: csrf.body.csrfToken,
+    body: { dni: therapistDni, password, role: 'therapist' },
+  })
+  assert.equal(login.status, 200)
+
+  const createPatient = async (dni, firstName) => {
+    const response = await therapistClient('/api/therapist/patients', {
+      method: 'POST',
+      csrfToken: login.body.csrfToken,
+      body: { firstName, lastName: 'Próxima', dni, password: 'a-secure-patient-password' },
+    })
+    assert.equal(response.status, 201)
+    return response.body.patient
+  }
+  const patient = await createPatient('00111111', 'Primera')
+  const otherPatient = await createPatient('00222222', 'Otra')
+
+  const createAppointment = async (patientId, start, observations = '') => {
+    const end = shiftArgentinaDateTime(start, 20)
+    const response = await therapistClient('/api/therapist/appointments', {
+      method: 'POST',
+      csrfToken: login.body.csrfToken,
+      body: {
+        patientId,
+        date: start.date,
+        startTime: start.time,
+        endTime: end.time,
+        color: '#cdeee6',
+        observations,
+      },
+    })
+    assert.equal(response.status, 201)
+    return response.body.appointment
+  }
+
+  const now = getArgentinaDateTime()
+  const futureMorning = shiftArgentinaDateTime({ ...now, time: '00:00' }, 14 * 1440 + 9 * 60)
+  const pastAppointment = await createAppointment(patient.id, shiftArgentinaDateTime(now, -60), 'Ya realizada')
+  const nearestAppointment = await createAppointment(patient.id, futureMorning, 'Próxima')
+  const laterAppointment = await createAppointment(patient.id, shiftArgentinaDateTime(futureMorning, 60), 'Posterior')
+  const otherPatientAppointment = await createAppointment(otherPatient.id, shiftArgentinaDateTime(futureMorning, -30))
+
+  const patientClient = createClient()
+  const patientCsrf = await patientClient('/api/auth/csrf')
+  const patientLogin = await patientClient('/api/auth/login', {
+    method: 'POST',
+    csrfToken: patientCsrf.body.csrfToken,
+    body: { dni: '00111111', password: 'a-secure-patient-password', role: 'patient' },
+  })
+  assert.equal(patientLogin.status, 200)
+  assert.equal((await patientClient('/api/therapist/appointments?from=2026-11-01&to=2026-11-30')).status, 403)
+
+  const initialUpcoming = await patientClient('/api/patient/appointments/upcoming')
+  assert.equal(initialUpcoming.status, 200)
+  assert.equal(initialUpcoming.body.appointment.id, nearestAppointment.id)
+  assert.notEqual(initialUpcoming.body.appointment.id, pastAppointment.id)
+  assert.notEqual(initialUpcoming.body.appointment.id, otherPatientAppointment.id)
+
+  const movedNearest = shiftArgentinaDateTime(futureMorning, 120)
+  const updateNearest = await therapistClient(`/api/therapist/appointments/${nearestAppointment.id}`, {
+    method: 'PUT',
+    csrfToken: login.body.csrfToken,
+    body: {
+      patientId: patient.id,
+      date: movedNearest.date,
+      startTime: movedNearest.time,
+      endTime: shiftArgentinaDateTime(movedNearest, 20).time,
+      color: '#dbeafe',
+      observations: '',
+    },
+  })
+  assert.equal(updateNearest.status, 200)
+  assert.equal((await patientClient('/api/patient/appointments/upcoming')).body.appointment.id, laterAppointment.id)
+
+  assert.equal((await therapistClient(`/api/therapist/appointments/${laterAppointment.id}`, {
+    method: 'DELETE',
+    csrfToken: login.body.csrfToken,
+  })).status, 204)
+  assert.equal((await patientClient('/api/patient/appointments/upcoming')).body.appointment.id, nearestAppointment.id)
+
+  assert.equal((await therapistClient(`/api/therapist/appointments/${nearestAppointment.id}`, {
+    method: 'DELETE',
+    csrfToken: login.body.csrfToken,
+  })).status, 204)
+  const noUpcoming = await patientClient('/api/patient/appointments/upcoming')
+  assert.equal(noUpcoming.status, 200)
+  assert.equal(noUpcoming.body.appointment, null)
+
+  const otherPatientClient = createClient()
+  const otherPatientCsrf = await otherPatientClient('/api/auth/csrf')
+  const otherPatientLogin = await otherPatientClient('/api/auth/login', {
+    method: 'POST',
+    csrfToken: otherPatientCsrf.body.csrfToken,
+    body: { dni: '00222222', password: 'a-secure-patient-password', role: 'patient' },
+  })
+  assert.equal(otherPatientLogin.status, 200)
+  assert.equal((await otherPatientClient('/api/patient/appointments/upcoming')).body.appointment.id, otherPatientAppointment.id)
 })
 
 test('requires a strong production session secret and enforces a single therapist account', () => {

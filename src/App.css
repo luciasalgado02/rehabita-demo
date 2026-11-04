@@ -322,6 +322,16 @@
 .patient-exercise-view .exercise-detail-view { min-height: 100vh; }
 .patient-workspace .workspace-content { max-width: 1040px; }
 .patient-workspace .workspace-card > .category-board { max-width: none; margin-top: 20px; }
+.patient-upcoming-appointment { display: flex; align-items: flex-start; gap: 16px; margin-top: 22px; padding: 18px 22px; border: 1px solid #cfe5df; border-radius: 15px; background: #f0f8f5; }
+.patient-appointment-icon { display: grid; place-items: center; width: 42px; height: 42px; flex: 0 0 42px; border-radius: 12px; color: var(--mint-dark); background: #dcefe9; }
+.patient-appointment-icon svg { width: 21px; height: 21px; }
+.patient-appointment-content { min-width: 0; }
+.patient-appointment-content .eyebrow { margin-bottom: 5px; }
+.patient-appointment-content h2 { margin: 0; color: var(--ink); font-size: calc(18px * var(--text-scale, 1)); line-height: 1.35; text-transform: capitalize; }
+.patient-appointment-time, .patient-appointment-location { display: flex; align-items: flex-start; gap: 8px; margin: 8px 0 0; color: var(--muted); font-size: calc(14px * var(--text-scale, 1)); line-height: 1.5; }
+.patient-appointment-time svg, .patient-appointment-location svg { width: 17px; height: 17px; flex: 0 0 17px; margin-top: 2px; color: var(--mint-dark); }
+.dark-mode .patient-upcoming-appointment { border-color: #52706d; background: #29403f; }
+.dark-mode .patient-appointment-icon { color: #a8e6db; background: #36534f; }
 @media (max-width: 600px) {
   .patient-form { grid-template-columns: minmax(0, 1fr); }
   .workspace-content { margin-top: 36px; }

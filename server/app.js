@@ -28,6 +28,23 @@ function isCalendarDate(value) {
   return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value
 }
 
+function getArgentinaDateTime() {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Argentina/Buenos_Aires',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(new Date())
+  const values = Object.fromEntries(parts.map(({ type, value }) => [type, value]))
+  return {
+    date: `${values.year}-${values.month}-${values.day}`,
+    time: `${values.hour}:${values.minute}`,
+  }
+}
+
 function isValidAppointmentInput(body) {
   return body && typeof body.patientId === 'string' && body.patientId.length > 0 &&
     isCalendarDate(body.date) &&
@@ -647,6 +664,25 @@ export function createApiApp({ db, sessionSecret, production = false } = {}) {
       return
     }
     res.json({ patient })
+  })
+
+  app.get('/api/patient/appointments/upcoming', requireRole('patient'), async (req, res) => {
+    const patient = await db.get('SELECT id, therapist_id AS therapistId FROM patients WHERE user_id = ?', [req.user.id])
+    if (!patient) {
+      res.status(404).json({ error: 'No se encontró la ficha asociada a esta cuenta.' })
+      return
+    }
+
+    const now = getArgentinaDateTime()
+    const appointment = await db.get(`
+      SELECT id, appointment_date AS date, start_time AS startTime, end_time AS endTime
+      FROM appointments
+      WHERE patient_id = ? AND therapist_id = ?
+        AND (appointment_date > ? OR (appointment_date = ? AND start_time > ?))
+      ORDER BY appointment_date, start_time, id
+      LIMIT 1
+    `, [patient.id, patient.therapistId, now.date, now.date, now.time])
+    res.json({ appointment: appointment || null })
   })
 
   app.get('/api/patient/exercises', requireRole('patient'), async (req, res) => {

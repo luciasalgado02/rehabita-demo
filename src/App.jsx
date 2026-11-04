@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { CalendarDays, ClipboardList, HeartPulse, LogOut, Search, UserRoundPlus, UsersRound } from 'lucide-react'
+import { CalendarDays, ClipboardList, Clock3, HeartPulse, LogOut, MapPin, Search, UserRoundPlus, UsersRound } from 'lucide-react'
 import { canGuestAccessExercise } from './exerciseAccess'
 import { apiRequest, getCsrfToken } from './api'
 import ExerciseCategories from './ExerciseCategories'
@@ -655,9 +655,12 @@ function PatientCreationForm({ form, setForm, isSaving, onSubmit }) {
 function PatientWorkspace({ user, onLogout }) {
   const [patient, setPatient] = useState(null)
   const [exerciseIds, setExerciseIds] = useState([])
+  const [upcomingAppointment, setUpcomingAppointment] = useState(null)
+  const [appointmentError, setAppointmentError] = useState('')
   const [selectedExercise, setSelectedExercise] = useState(null)
   const [openCategory, setOpenCategory] = useState(null)
   const [error, setError] = useState('')
+  const appointmentRequestId = useRef(0)
 
   useEffect(() => {
     apiRequest('/api/patient/me')
@@ -669,6 +672,30 @@ function PatientWorkspace({ user, onLogout }) {
     apiRequest('/api/patient/exercises')
       .then(({ exerciseIds: result }) => setExerciseIds(result))
       .catch((requestError) => setError(requestError.message))
+  }, [])
+
+  useEffect(() => {
+    const loadUpcomingAppointment = async () => {
+      const requestId = ++appointmentRequestId.current
+      try {
+        const { appointment } = await apiRequest('/api/patient/appointments/upcoming')
+        if (appointmentRequestId.current === requestId) {
+          setUpcomingAppointment(appointment)
+          setAppointmentError('')
+        }
+      } catch (requestError) {
+        if (appointmentRequestId.current === requestId) setAppointmentError(requestError.message)
+      }
+    }
+    const handleFocus = () => { void loadUpcomingAppointment() }
+    void loadUpcomingAppointment()
+    const intervalId = window.setInterval(loadUpcomingAppointment, 30_000)
+    window.addEventListener('focus', handleFocus)
+    return () => {
+      appointmentRequestId.current += 1
+      window.clearInterval(intervalId)
+      window.removeEventListener('focus', handleFocus)
+    }
   }, [])
 
   const openAssignedExercise = async (exercise) => {
@@ -700,6 +727,18 @@ function PatientWorkspace({ user, onLogout }) {
         <p className="eyebrow">ESPACIO DEL PACIENTE</p>
         <h1>{patient ? `Hola, ${patient.firstName}` : `Hola, ${user.displayName}`}</h1>
         {error && <p className="form-message error-message" role="alert">{error}</p>}
+        {appointmentError && <p className="form-message error-message" role="alert">{appointmentError}</p>}
+        {upcomingAppointment && (
+          <section className="patient-upcoming-appointment" aria-labelledby="upcoming-appointment-title">
+            <div className="patient-appointment-icon"><CalendarDays aria-hidden="true" /></div>
+            <div className="patient-appointment-content">
+              <p className="eyebrow">PRÓXIMA CITA</p>
+              <h2 id="upcoming-appointment-title">{formatPatientAppointmentDate(upcomingAppointment.date)}</h2>
+              <p className="patient-appointment-time"><Clock3 aria-hidden="true" /> {upcomingAppointment.startTime}–{upcomingAppointment.endTime}</p>
+              <p className="patient-appointment-location"><MapPin aria-hidden="true" /> <span>Dolores, Buenos Aires<br />Calle Mar del Plata 47</span></p>
+            </div>
+          </section>
+        )}
         <section className="workspace-card">
           <h2>Lista de categorías y ejercicios</h2>
           {exerciseIds.length ? (
@@ -715,6 +754,16 @@ function PatientWorkspace({ user, onLogout }) {
       </div>
     </section>
   )
+}
+
+function formatPatientAppointmentDate(value) {
+  return new Intl.DateTimeFormat('es-AR', {
+    timeZone: 'UTC',
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  }).format(new Date(`${value}T12:00:00Z`))
 }
 
 export default App
