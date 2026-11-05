@@ -152,6 +152,14 @@ export default function ExercisePlayer({ exercise, configuration, onBack, onFini
             {progress.phase === 'complete' ? 'Volver a mis ejercicios' : 'Finalizar ejercicio'}
           </button>
         </div>
+        <aside className="guest-note exercise-safety-notice" aria-label="Aviso de seguridad">
+          <div>
+            <span aria-hidden="true">!</span>
+            <strong>Si un movimiento resulta incómodo</strong>
+            <p>Detené el ejercicio y descansá. No fuerces el cuerpo ni continúes si sentís dolor, mareo o falta de aire.</p>
+            <p>Para retomar, esperá a sentirte bien y hacé el movimiento más despacio. Si la molestia continúa, hablá con tu terapeuta.</p>
+          </div>
+        </aside>
       </section>
     </div>
   )

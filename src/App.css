@@ -237,9 +237,16 @@
 .exercise-player-actions svg { width: 18px; height: 18px; }
 .exercise-finish-button { border: 1px solid #d5aaa4; color: #78463f; background: #fbefed; }
 .exercise-finish-button:hover, .exercise-finish-button:focus-visible { border-color: #bd8078; background: #f7e1de; outline: 3px solid rgba(189,128,120,.2); }
+.exercise-safety-notice { display: block; margin: 18px 0 0; padding: 16px 18px; border: 1px solid #e8cf8d; border-radius: 16px; background: #fff8e7; color: var(--ink); text-align: left; }
+.exercise-safety-notice > div { min-width: 0; }
+.exercise-safety-notice > div > span { background: #f4d98d; color: #9b721d; font-weight: 800; }
+.exercise-safety-notice strong { line-height: 1.4; }
+.exercise-safety-notice p + p { margin-top: 8px; }
 .dark-mode .exercise-player-card { background: rgba(32, 51, 51, .92); }
 .dark-mode .exercise-player-video-wrap, .dark-mode .exercise-player-video { border-color: var(--line); background: #172525; }
 .dark-mode .exercise-rest-overlay { color: var(--ink); background: rgba(32, 51, 51, .97); }
+.dark-mode .exercise-safety-notice { border-color: #8d7743; background: #453a23; }
+.dark-mode .exercise-safety-notice > div > span { background: #705b28; color: #ffe19a; }
 .dark-mode .exercise-rest-overlay strong { color: #a8e6db; }
 .dark-mode .exercise-progress-track { background: #29403f; }
 .dark-mode .exercise-finish-button { border-color: #94625b; color: #ffd2cc; background: #493735; }
