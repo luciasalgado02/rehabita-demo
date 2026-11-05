@@ -64,6 +64,10 @@ function isValidExerciseConfiguration(body) {
     Number.isInteger(body.restSeconds) && body.restSeconds >= 0 && body.restSeconds <= 3600
 }
 
+function getCompletedSeries(repetitions, repetitionsPerSeries, totalSeries) {
+  return Math.min(totalSeries, Math.floor(repetitions / repetitionsPerSeries))
+}
+
 function getAge(birthDate) {
   if (!birthDate) return null
   const [year, month, day] = birthDate.split('-').map(Number)
@@ -684,6 +688,31 @@ export function createApiApp({ db, sessionSecret, production = false } = {}) {
     res.json({ configuration: { exerciseId: req.params.exerciseId, ...req.body } })
   })
 
+  app.get('/api/therapist/patients/:patientId/progress', requireRole('therapist'), async (req, res) => {
+    const patient = await getTherapistPatient(req.params.patientId, req.user.id)
+    if (!patient) {
+      res.status(404).json({ error: 'No se encontró el paciente solicitado.' })
+      return
+    }
+
+    const exerciseIds = await getPlanExerciseIds(patient.id)
+    const sessions = await db.all(`
+      SELECT id, exercise_id AS exerciseId, activity_date AS activityDate,
+        started_at AS startedAt, repetitions_completed AS completedRepetitions,
+        configured_repetitions AS configuredRepetitions,
+        series_completed AS completedSeries, configured_series AS configuredSeries,
+        activity_seconds AS activeSeconds, completed
+      FROM session_records
+      WHERE patient_id = ? AND exercise_id IS NOT NULL
+      ORDER BY started_at DESC, id DESC
+    `, [patient.id])
+    res.json({
+      patient: { id: patient.id, firstName: patient.firstName, lastName: patient.lastName },
+      exerciseIds,
+      sessions: sessions.map((session) => ({ ...session, completed: Boolean(session.completed) })),
+    })
+  })
+
   app.post('/api/therapist/patients', requireCsrf, requireRole('therapist'), async (req, res, next) => {
     const { firstName, lastName, dni, password, birthDate } = req.body ?? {}
     if (
@@ -796,6 +825,163 @@ export function createApiApp({ db, sessionSecret, production = false } = {}) {
     res.json({ exercise, configuration })
   })
 
+  app.get('/api/patient/exercise-progress/today', requireRole('patient'), async (req, res) => {
+    const patient = await db.get('SELECT id FROM patients WHERE user_id = ?', [req.user.id])
+    if (!patient) {
+      res.status(404).json({ error: 'No se encontró la ficha asociada a esta cuenta.' })
+      return
+    }
+
+    const { date } = getArgentinaDateTime()
+    const rows = await db.all(`
+      SELECT DISTINCT session_records.exercise_id AS exerciseId
+      FROM session_records
+      WHERE session_records.patient_id = ?
+        AND session_records.activity_date = ?
+        AND session_records.completed = 1
+        AND EXISTS (
+          SELECT 1 FROM plan_exercises
+          JOIN plans ON plans.id = plan_exercises.plan_id
+          WHERE plans.patient_id = session_records.patient_id
+            AND plan_exercises.exercise_id = session_records.exercise_id
+        )
+      ORDER BY session_records.exercise_id
+    `, [patient.id, date])
+    res.json({ completedExerciseIds: rows.map(({ exerciseId }) => exerciseId) })
+  })
+
+  app.post('/api/patient/exercise-sessions', requireCsrf, requireRole('patient'), async (req, res) => {
+    const { exerciseId } = req.body ?? {}
+    if (typeof exerciseId !== 'string' || !exercisesById.has(exerciseId)) {
+      res.status(400).json({ error: 'Seleccioná un ejercicio válido.' })
+      return
+    }
+
+    const patient = await db.get('SELECT id FROM patients WHERE user_id = ?', [req.user.id])
+    if (!patient) {
+      res.status(404).json({ error: 'No se encontró la ficha asociada a esta cuenta.' })
+      return
+    }
+    const assignment = await db.get(`
+      SELECT plans.id AS planId, plan_exercises.repetitions AS repetitions,
+        plan_exercises.series AS series
+      FROM plan_exercises
+      JOIN plans ON plans.id = plan_exercises.plan_id
+      WHERE plans.patient_id = ? AND plan_exercises.exercise_id = ?
+        AND plan_exercises.repetitions IS NOT NULL
+      ORDER BY plans.created_at, plans.id
+      LIMIT 1
+    `, [patient.id, exerciseId])
+    if (!assignment) {
+      res.status(409).json({ error: 'Este ejercicio no tiene una configuración guardada para tu plan.' })
+      return
+    }
+
+    const id = randomUUID()
+    const { date } = getArgentinaDateTime()
+    const startedAt = new Date().toISOString()
+    await db.run(`
+      INSERT INTO session_records (
+        id, patient_id, plan_id, started_at, activity_date, exercise_id,
+        configured_repetitions, configured_series
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `, [id, patient.id, assignment.planId, startedAt, date, exerciseId, assignment.repetitions, assignment.series])
+    res.status(201).json({
+      session: {
+        id,
+        exerciseId,
+        activityDate: date,
+        configuredRepetitions: assignment.repetitions,
+        configuredSeries: assignment.series,
+      },
+    })
+  })
+
+  app.patch('/api/patient/exercise-sessions/:sessionId', requireCsrf, requireRole('patient'), async (req, res) => {
+    const body = req.body ?? {}
+    if (!Number.isInteger(body.completedRepetitions) || body.completedRepetitions < 0 ||
+      !Number.isInteger(body.completedSeries) || body.completedSeries < 0 ||
+      !Number.isInteger(body.activeSeconds) || body.activeSeconds < 0 || body.activeSeconds > 86_400 ||
+      typeof body.completed !== 'boolean' || typeof body.ended !== 'boolean') {
+      res.status(400).json({ error: 'Los datos de progreso no son válidos.' })
+      return
+    }
+
+    const patient = await db.get('SELECT id FROM patients WHERE user_id = ?', [req.user.id])
+    if (!patient) {
+      res.status(404).json({ error: 'No se encontró la ficha asociada a esta cuenta.' })
+      return
+    }
+    const result = await db.withTransaction(async (tx) => {
+      const sessionRecord = await tx.get(`
+        SELECT id, ended_at AS endedAt, repetitions_completed AS completedRepetitions,
+          series_completed AS completedSeries, activity_seconds AS activeSeconds,
+          configured_repetitions AS configuredRepetitions,
+          configured_series AS configuredSeries, activity_date AS activityDate, completed
+        FROM session_records
+        WHERE id = ? AND patient_id = ? AND exercise_id IS NOT NULL
+      `, [req.params.sessionId, patient.id])
+      if (!sessionRecord) return { error: 'not-found' }
+
+      const maxRepetitions = sessionRecord.configuredRepetitions * sessionRecord.configuredSeries
+      const expectedSeries = getCompletedSeries(
+        body.completedRepetitions,
+        sessionRecord.configuredRepetitions,
+        sessionRecord.configuredSeries
+      )
+      if (body.completedRepetitions > maxRepetitions || body.completedSeries !== expectedSeries ||
+        body.completed && (body.completedRepetitions !== maxRepetitions ||
+          body.completedSeries !== sessionRecord.configuredSeries || !body.ended)) {
+        return { error: 'invalid-progress' }
+      }
+
+      const alreadyEnded = Boolean(sessionRecord.endedAt)
+      const hasChanges = body.completedRepetitions > sessionRecord.completedRepetitions ||
+        body.completedSeries > sessionRecord.completedSeries ||
+        body.activeSeconds > sessionRecord.activeSeconds ||
+        body.completed && !sessionRecord.completed
+      if (alreadyEnded && hasChanges) return { error: 'already-ended' }
+
+      const completedRepetitions = Math.max(sessionRecord.completedRepetitions, body.completedRepetitions)
+      const completedSeries = getCompletedSeries(
+        completedRepetitions,
+        sessionRecord.configuredRepetitions,
+        sessionRecord.configuredSeries
+      )
+      const activeSeconds = Math.max(sessionRecord.activeSeconds, body.activeSeconds)
+      const newlyCompleted = sessionRecord.completed === 0 && body.completed
+      const completed = sessionRecord.completed === 1 || newlyCompleted
+      const ended = alreadyEnded || body.ended || completed
+      const { date: completedDate } = getArgentinaDateTime()
+      const endedAt = new Date().toISOString()
+
+      await tx.run(`
+        UPDATE session_records
+        SET repetitions_completed = ?, series_completed = ?, activity_seconds = ?,
+          completed = ?, activity_date = ?, ended_at = CASE WHEN ? = 1 THEN COALESCE(ended_at, ?) ELSE ended_at END
+        WHERE id = ? AND patient_id = ?
+      `, [
+        completedRepetitions, completedSeries, activeSeconds, completed ? 1 : 0,
+        newlyCompleted ? completedDate : sessionRecord.activityDate,
+        ended ? 1 : 0, endedAt, sessionRecord.id, patient.id,
+      ])
+      return { completedRepetitions, completedSeries, activeSeconds, completed, ended }
+    })
+    if (result.error === 'not-found') {
+      res.status(404).json({ error: 'No se encontró la sesión de ejercicio.' })
+      return
+    }
+    if (result.error === 'invalid-progress') {
+      res.status(400).json({ error: 'Las repeticiones y series registradas no coinciden con la configuración.' })
+      return
+    }
+    if (result.error === 'already-ended') {
+      res.status(409).json({ error: 'Esta sesión de ejercicio ya fue finalizada.' })
+      return
+    }
+    res.json({ session: result })
+  })
+
   app.use('/api', (req, res) => {
     res.status(404).json({ error: 'La operación solicitada no está disponible.' })
   })
@@ -816,6 +1002,17 @@ export function createApiApp({ db, sessionSecret, production = false } = {}) {
       console.error('Agenda database migration is missing: 20261104000000_agenda.sql')
       res.status(503).json({
         error: 'La agenda todavía no está habilitada en la base de datos. Aplicá la migración 20261104000000_agenda.sql en Supabase e intentá nuevamente.',
+      })
+      return
+    }
+    const progressMigrationMissing =
+      ((error?.code === '42703' || error?.code === '42P01') && /session_records/i.test(error.message || '')) ||
+      (error?.code === 'SQLITE_ERROR' && /no such table:\s*session_records/i.test(error.message || '')) ||
+      (error?.code === 'SQLITE_ERROR' && /no such column:.*(activity_date|exercise_id|configured_repetitions|configured_series|repetitions_completed|series_completed|activity_seconds|completed)/i.test(error.message || ''))
+    if (progressMigrationMissing) {
+      console.error('Exercise progress database migration is missing: 20261104220000_exercise_progress.sql')
+      res.status(503).json({
+        error: 'El seguimiento todavía no está habilitado en la base de datos. Aplicá la migración 20261104220000_exercise_progress.sql en Supabase e intentá nuevamente.',
       })
       return
     }

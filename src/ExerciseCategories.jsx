@@ -1,6 +1,6 @@
 import { canGuestAccessExercise } from './exerciseAccess'
 import { exerciseCategories } from '../shared/exercises'
-import { Settings2 } from 'lucide-react'
+import { CheckCircle2, Settings2 } from 'lucide-react'
 
 export default function ExerciseCategories({
   mode = 'guest',
@@ -8,6 +8,7 @@ export default function ExerciseCategories({
   setOpenCategory,
   selectedExerciseIds = [],
   exerciseConfigurations = {},
+  completedExerciseIds = [],
   onSelectExercise,
   onToggleExercise,
   onConfigureExercise,
@@ -50,6 +51,7 @@ export default function ExerciseCategories({
                         : mode === 'patient'
                           ? isSelected
                           : true
+                      const isCompletedToday = mode === 'patient' && completedExerciseIds.includes(item.id)
                       const label = mode === 'selection'
                         ? isSelected ? 'Asignado al paciente' : 'No asignado'
                         : isAvailable
@@ -58,6 +60,7 @@ export default function ExerciseCategories({
                       const className = [
                         'exercise-option',
                         mode === 'selection' && isSelected ? 'selected' : '',
+                        isCompletedToday ? 'exercise-option-completed' : '',
                         !isAvailable ? 'restricted' : '',
                       ].filter(Boolean).join(' ')
                       const configuration = exerciseConfigurations[item.id]
@@ -76,11 +79,18 @@ export default function ExerciseCategories({
                             }}
                             disabled={disabled || (mode !== 'selection' && !isAvailable)}
                             aria-pressed={mode === 'selection' ? isSelected : undefined}
-                            aria-label={`${item.name}: ${label}`}
+                            aria-label={`${item.name}: ${isCompletedToday ? 'Ya hiciste este ejercicio hoy' : label}`}
                           >
                             <span className="exercise-option-content">
                               <span>{item.name}</span>
-                              <small>{mode === 'selection' && configuration ? 'Configurado' : label}</small>
+                              <small>
+                                {isCompletedToday ? (
+                                  <span className="exercise-completed-indicator">
+                                    <CheckCircle2 aria-hidden="true" />
+                                    ¡Ya hiciste este ejercicio!
+                                  </span>
+                                ) : mode === 'selection' && configuration ? 'Configurado' : label}
+                              </small>
                             </span>
                           </button>
                           {mode === 'selection' && (

@@ -57,7 +57,15 @@ export function openDatabase(filename = process.env.DATABASE_PATH || path.join(p
       patient_id TEXT NOT NULL REFERENCES patients(id) ON DELETE CASCADE,
       plan_id TEXT REFERENCES plans(id) ON DELETE SET NULL,
       started_at TEXT NOT NULL,
-      ended_at TEXT
+      ended_at TEXT,
+      activity_date TEXT,
+      exercise_id TEXT,
+      configured_repetitions INTEGER,
+      configured_series INTEGER,
+      repetitions_completed INTEGER NOT NULL DEFAULT 0,
+      series_completed INTEGER NOT NULL DEFAULT 0,
+      activity_seconds INTEGER NOT NULL DEFAULT 0,
+      completed INTEGER NOT NULL DEFAULT 0 CHECK (completed IN (0, 1))
     );
 
     CREATE TABLE IF NOT EXISTS appointments (
@@ -100,6 +108,22 @@ export function openDatabase(filename = process.env.DATABASE_PATH || path.join(p
       db.exec(`ALTER TABLE plan_exercises ADD COLUMN ${name} ${type}`)
     }
   }
+  const sessionRecordColumns = new Set(db.prepare('PRAGMA table_info(session_records)').all().map(({ name }) => name))
+  for (const [name, definition] of [
+    ['activity_date', 'TEXT'],
+    ['exercise_id', 'TEXT'],
+    ['configured_repetitions', 'INTEGER'],
+    ['configured_series', 'INTEGER'],
+    ['repetitions_completed', 'INTEGER NOT NULL DEFAULT 0'],
+    ['series_completed', 'INTEGER NOT NULL DEFAULT 0'],
+    ['activity_seconds', 'INTEGER NOT NULL DEFAULT 0'],
+    ['completed', 'INTEGER NOT NULL DEFAULT 0'],
+  ]) {
+    if (!sessionRecordColumns.has(name)) {
+      db.exec(`ALTER TABLE session_records ADD COLUMN ${name} ${definition}`)
+    }
+  }
+  db.exec('CREATE INDEX IF NOT EXISTS session_records_patient_exercise_date_idx ON session_records(patient_id, exercise_id, activity_date)')
   db.prepare('DELETE FROM web_sessions WHERE expires <= ?').run(Date.now())
   let transactionTail = Promise.resolve()
   let transactionActive = false

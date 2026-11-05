@@ -1,5 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { CheckCircle2, Pause, Play, Square } from 'lucide-react'
+import { apiRequest } from './api'
+import { closeActivityInterval, getActivityMilliseconds } from './exerciseActivity'
 import { advanceExercisePlayback, advanceExerciseRest, createExercisePlaybackState } from './exercisePlayback'
 import { exerciseAnimations } from './exerciseAnimations'
 
@@ -8,11 +10,108 @@ export default function ExercisePlayer({ exercise, configuration, onBack, onFini
   const [progress, setProgress] = useState(createExercisePlaybackState)
   const [isPaused, setIsPaused] = useState(false)
   const [playbackError, setPlaybackError] = useState('')
+  const [sessionId, setSessionId] = useState(null)
+  const [isSessionLoading, setIsSessionLoading] = useState(Boolean(configuration))
   const videoRef = useRef(null)
   const videoEndedRef = useRef(false)
+  const progressRef = useRef(progress)
+  const sessionIdRef = useRef(null)
+  const accumulatedActivityRef = useRef(0)
+  const playbackStartedAtRef = useRef(null)
+  const sessionWriteQueueRef = useRef(Promise.resolve())
+  const sessionCreationPromiseRef = useRef(null)
+  const sessionEffectIdRef = useRef(0)
+  const persistProgressRef = useRef(null)
+  const mountedRef = useRef(true)
+
+  const persistProgress = useCallback((state = progressRef.current, ended = false, closePlayback = false) => {
+    const currentTime = performance.now()
+    if (closePlayback) {
+      const closedInterval = closeActivityInterval(
+        accumulatedActivityRef.current,
+        playbackStartedAtRef.current,
+        currentTime
+      )
+      accumulatedActivityRef.current = closedInterval.accumulatedMilliseconds
+      playbackStartedAtRef.current = closedInterval.playbackStartedAt
+    }
+    const activeMilliseconds = getActivityMilliseconds(
+      accumulatedActivityRef.current,
+      playbackStartedAtRef.current,
+      currentTime
+    )
+    const completed = state.phase === 'complete'
+    const request = {
+      completedRepetitions: state.completedRepetitions,
+      completedSeries: Math.floor(state.completedRepetitions / configuration.repetitions),
+      activeSeconds: Math.floor(activeMilliseconds / 1000),
+      completed,
+      ended: ended || completed,
+    }
+    const id = sessionIdRef.current
+    if (!id) return Promise.resolve()
+
+    const save = sessionWriteQueueRef.current.catch(() => {}).then(() =>
+      apiRequest(`/api/patient/exercise-sessions/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        body: request,
+      })
+    )
+    sessionWriteQueueRef.current = save
+    save.catch((requestError) => {
+      if (mountedRef.current) setPlaybackError(requestError.message)
+    })
+    return save
+  }, [configuration])
 
   useEffect(() => {
+    persistProgressRef.current = persistProgress
+  }, [persistProgress])
+
+  useEffect(() => {
+    mountedRef.current = true
     if (!configuration) return undefined
+
+    let active = true
+    const effectId = ++sessionEffectIdRef.current
+    sessionCreationPromiseRef.current ||= apiRequest('/api/patient/exercise-sessions', {
+      method: 'POST',
+      body: { exerciseId: exercise.id },
+    }).then(({ session }) => session)
+    sessionCreationPromiseRef.current
+      .then((session) => {
+        if (!active) {
+          if (sessionEffectIdRef.current === effectId) {
+            return apiRequest(`/api/patient/exercise-sessions/${encodeURIComponent(session.id)}`, {
+              method: 'PATCH',
+              body: {
+                completedRepetitions: 0,
+                completedSeries: 0,
+                activeSeconds: 0,
+                completed: false,
+                ended: true,
+              },
+            })
+          }
+          return undefined
+        }
+        sessionIdRef.current = session.id
+        setSessionId(session.id)
+        setIsSessionLoading(false)
+        return undefined
+      })
+      .catch((requestError) => {
+        if (active) {
+          setPlaybackError(requestError.message)
+          setIsPaused(true)
+          setIsSessionLoading(false)
+        }
+      })
+    return () => { active = false }
+  }, [configuration, exercise.id])
+
+  useEffect(() => {
+    if (!configuration || !sessionId) return undefined
     if (progress.phase !== 'playing' || isPaused) return undefined
     const video = videoRef.current
     if (!video) return undefined
@@ -23,18 +122,34 @@ export default function ExercisePlayer({ exercise, configuration, onBack, onFini
       setIsPaused(true)
     })
     return undefined
-  }, [animation, configuration, isPaused, progress.phase, progress.repetition, progress.series])
+  }, [animation, configuration, isPaused, progress.phase, progress.repetition, progress.series, sessionId])
 
   useEffect(() => {
     if (progress.phase !== 'rest' || isPaused) return undefined
     const timerId = window.setInterval(() => {
-      setProgress((current) => advanceExerciseRest(current))
+      const next = advanceExerciseRest(progressRef.current)
+      progressRef.current = next
+      setProgress(next)
     }, 1000)
     return () => window.clearInterval(timerId)
   }, [isPaused, progress.phase])
 
+  useEffect(() => {
+    if (!sessionId || !configuration || progress.phase !== 'playing' || isPaused) return undefined
+    const timerId = window.setInterval(() => {
+      if (playbackStartedAtRef.current !== null) {
+        void persistProgressRef.current?.().catch(() => {})
+      }
+    }, 3000)
+    return () => window.clearInterval(timerId)
+  }, [configuration, isPaused, progress.phase, sessionId])
+
   useEffect(() => () => {
+    mountedRef.current = false
     if (videoRef.current) videoRef.current.pause()
+    if (sessionIdRef.current) {
+      void persistProgressRef.current?.(progressRef.current, true, true).catch(() => {})
+    }
   }, [])
 
   const resume = () => {
@@ -47,11 +162,45 @@ export default function ExercisePlayer({ exercise, configuration, onBack, onFini
     setIsPaused(true)
   }
 
-  const handleVideoEnded = () => {
-    if (videoEndedRef.current || progress.phase !== 'playing') return
-    videoEndedRef.current = true
-    setProgress((current) => advanceExercisePlayback(current, configuration))
+  const exitExercise = async () => {
+    videoRef.current?.pause()
+    try {
+      await persistProgress(progressRef.current, true, true)
+      onBack()
+    } catch {
+      return
+    }
   }
+
+  const finishExercise = async () => {
+    videoRef.current?.pause()
+    try {
+      await persistProgress(progressRef.current, true, true)
+      onFinish()
+    } catch {
+      return
+    }
+  }
+
+  const handleVideoPlay = () => {
+    videoEndedRef.current = false
+    if (playbackStartedAtRef.current === null) playbackStartedAtRef.current = performance.now()
+  }
+
+  const handleVideoPause = (event) => {
+    if (event.currentTarget.ended || progressRef.current.phase !== 'playing') return
+    void persistProgressRef.current?.(progressRef.current, false, true).catch(() => {})
+  }
+
+  const handleVideoEnded = () => {
+    if (videoEndedRef.current || progressRef.current.phase !== 'playing') return
+    videoEndedRef.current = true
+    const next = advanceExercisePlayback(progressRef.current, configuration)
+    progressRef.current = next
+    setProgress(next)
+    void persistProgressRef.current?.(next, next.phase === 'complete', true).catch(() => {})
+  }
+
 
   if (!configuration) {
     return (
@@ -83,7 +232,7 @@ export default function ExercisePlayer({ exercise, configuration, onBack, onFini
 
   return (
     <div className="exercise-detail-view exercise-player-view">
-      <button type="button" className="guest-back" onClick={onBack}>← Volver a categorías</button>
+      <button type="button" className="guest-back" onClick={exitExercise}>← Volver a categorías</button>
       <section className="exercise-detail-card exercise-player-card" aria-labelledby="exercise-player-title">
         <p className="eyebrow">EJERCICIO ASIGNADO</p>
         <h1 id="exercise-player-title">{animation.name}</h1>
@@ -110,7 +259,10 @@ export default function ExercisePlayer({ exercise, configuration, onBack, onFini
               muted
               playsInline
               preload="auto"
-              onPlay={() => { videoEndedRef.current = false }}
+              onPlay={handleVideoPlay}
+              onPlaying={handleVideoPlay}
+              onPause={handleVideoPause}
+              onWaiting={handleVideoPause}
               onEnded={handleVideoEnded}
               onError={() => {
                 setPlaybackError('No se pudo cargar el video. Verificá que el archivo MP4 esté en public/videos/ejercicios/.')
@@ -142,16 +294,17 @@ export default function ExercisePlayer({ exercise, configuration, onBack, onFini
         {playbackError && <p className="form-message error-message" role="alert">{playbackError}</p>}
         <div className="exercise-player-actions">
           {progress.phase !== 'complete' && (
-            <button type="button" className="primary-button" onClick={isPaused ? resume : pause}>
+            <button type="button" className="primary-button" onClick={isPaused ? resume : pause} disabled={!sessionId}>
               {isPaused ? <Play aria-hidden="true" /> : <Pause aria-hidden="true" />}
               {isPaused ? 'Reanudar' : 'Pausar'}
             </button>
           )}
-          <button type="button" className="exercise-finish-button" onClick={onFinish}>
+          <button type="button" className="exercise-finish-button" onClick={finishExercise} disabled={isSessionLoading}>
             <Square aria-hidden="true" />
             {progress.phase === 'complete' ? 'Volver a mis ejercicios' : 'Finalizar ejercicio'}
           </button>
         </div>
+        {isSessionLoading && <p className="exercise-session-status" role="status">Preparando el registro de la sesión…</p>}
         <aside className="guest-note exercise-safety-notice" aria-label="Aviso de seguridad">
           <div>
             <span aria-hidden="true">!</span>

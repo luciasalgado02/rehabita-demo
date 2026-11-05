@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import { CalendarDays, ClipboardList, Clock3, HeartPulse, LogOut, MapPin, Search, UserRoundPlus, UsersRound, X } from 'lucide-react'
+import { CalendarDays, ChartNoAxesColumnIncreasing, ClipboardList, Clock3, HeartPulse, LogOut, MapPin, Search, UserRoundPlus, UsersRound, X } from 'lucide-react'
 import { canGuestAccessExercise } from './exerciseAccess'
 import { apiRequest, getCsrfToken } from './api'
 import ExerciseCategories from './ExerciseCategories'
 import ExercisePlayer from './ExercisePlayer'
 import { exerciseAnimations } from './exerciseAnimations'
 import TherapistAgenda from './TherapistAgenda'
+import { exerciseCategories } from '../shared/exercises'
 import './App.css'
 
 function App() {
@@ -230,6 +231,10 @@ function TherapistWorkspace({ onLogout }) {
   const planPatientIdRef = useRef(planPatientId)
   const [patientSearch, setPatientSearch] = useState('')
   const [patientListSearch, setPatientListSearch] = useState('')
+  const [progressSearch, setProgressSearch] = useState('')
+  const [progressPatientId, setProgressPatientId] = useState('')
+  const [patientProgress, setPatientProgress] = useState(null)
+  const [isProgressLoading, setIsProgressLoading] = useState(false)
   const [exerciseIds, setExerciseIds] = useState([])
   const [exerciseConfigurations, setExerciseConfigurations] = useState({})
   const [configuringExercise, setConfiguringExercise] = useState(null)
@@ -297,6 +302,25 @@ function TherapistWorkspace({ onLogout }) {
       })
     return () => { active = false }
   }, [activeSection, planPatientId])
+
+  useEffect(() => {
+    if (activeSection !== 'progress' || !progressPatientId) return undefined
+    let active = true
+    apiRequest(`/api/therapist/patients/${encodeURIComponent(progressPatientId)}/progress`)
+      .then((result) => {
+        if (active) {
+          setPatientProgress(result)
+          setError('')
+        }
+      })
+      .catch((requestError) => {
+        if (active) setError(requestError.message)
+      })
+      .finally(() => {
+        if (active) setIsProgressLoading(false)
+      })
+    return () => { active = false }
+  }, [activeSection, progressPatientId])
 
   const openPatient = async (patient) => {
     setError('')
@@ -442,6 +466,9 @@ function TherapistWorkspace({ onLogout }) {
   const filteredRegisteredPatients = patients.filter((patient) =>
     `${patient.firstName} ${patient.lastName}`.toLocaleLowerCase().includes(patientListSearch.trim().toLocaleLowerCase())
   )
+  const filteredProgressPatients = patients.filter((patient) =>
+    `${patient.firstName} ${patient.lastName}`.toLocaleLowerCase().includes(progressSearch.trim().toLocaleLowerCase())
+  )
 
   return (
     <section className="therapist-layout">
@@ -459,6 +486,9 @@ function TherapistWorkspace({ onLogout }) {
           </button>
           <button type="button" className={activeSection === 'agenda' ? 'nav-item active' : 'nav-item'} onClick={() => { setActiveSection('agenda'); setError('') }}>
             <CalendarDays aria-hidden="true" /> Agenda
+          </button>
+          <button type="button" className={activeSection === 'progress' ? 'nav-item active' : 'nav-item'} onClick={() => { setActiveSection('progress'); setProgressPatientId(''); setPatientProgress(null); setProgressSearch(''); setIsProgressLoading(false); setError('') }}>
+            <ChartNoAxesColumnIncreasing aria-hidden="true" /> Progreso
           </button>
         </nav>
         <button type="button" className="therapist-logout" onClick={logout}><LogOut aria-hidden="true" /> Cerrar sesión</button>
@@ -651,6 +681,88 @@ function TherapistWorkspace({ onLogout }) {
 
             {activeSection === 'agenda' && (
               <TherapistAgenda patients={patients} isLoadingPatients={isLoading} />
+            )}
+
+            {activeSection === 'progress' && (
+              <>
+                <p className="eyebrow">SEGUIMIENTO</p>
+                <h1>Progreso de pacientes</h1>
+                {error && <p className="form-message error-message" role="alert">{error}</p>}
+                {progressPatientId ? (
+                  <section className="workspace-card therapist-progress-detail">
+                    <button
+                      type="button"
+                      className="guest-back"
+                      onClick={() => { setProgressPatientId(''); setPatientProgress(null); setIsProgressLoading(false); setError('') }}
+                    >
+                      ← Volver a pacientes
+                    </button>
+                    {isProgressLoading ? <p role="status">Cargando el progreso…</p> : patientProgress && (
+                      <>
+                        <h2>{patientProgress.patient.firstName} {patientProgress.patient.lastName}</h2>
+                        <div className="exercise-progress-list">
+                          {patientProgress.exerciseIds.map((exerciseId) => {
+                            const exercise = exerciseCategories.flatMap((category) => category.items).find((item) => item.id === exerciseId)
+                            if (!exercise) return null
+                            const sessions = patientProgress.sessions.filter((session) => session.exerciseId === exerciseId)
+                            const totalActiveSeconds = sessions.reduce((total, session) => total + session.activeSeconds, 0)
+                            return (
+                              <article key={exerciseId} className="exercise-progress-card">
+                                <h3>{exerciseAnimations[exerciseId]?.name || exercise.name}</h3>
+                                {sessions.length ? (
+                                  <>
+                                    {sessions.length > 1 && <p className="exercise-progress-total">Tiempo total acumulado: {formatActivityDuration(totalActiveSeconds)}</p>}
+                                    <ul>
+                                      {sessions.map((session) => (
+                                        <li key={session.id}>
+                                          <strong>{formatExerciseSessionDate(session.activityDate)}</strong>
+                                          <span>Repeticiones realizadas: {session.completedRepetitions} de {session.configuredRepetitions}.</span>
+                                          <span>Series completadas: {session.completedSeries} de {session.configuredSeries}.</span>
+                                          <span>Tiempo de actividad: {formatActivityDuration(session.activeSeconds)}.</span>
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  </>
+                                ) : <p className="exercise-progress-empty">Todavía no hay registros de este ejercicio.</p>}
+                              </article>
+                            )
+                          })}
+                          {patientProgress.exerciseIds.length === 0 && <p>Este paciente todavía no tiene ejercicios asignados.</p>}
+                        </div>
+                      </>
+                    )}
+                  </section>
+                ) : (
+                  <section className="workspace-card">
+                    <label className="patient-search">
+                      <Search aria-hidden="true" />
+                      <span className="sr-only">Buscar paciente por nombre o apellido</span>
+                      <input
+                        type="search"
+                        placeholder="Buscar paciente por nombre o apellido..."
+                        value={progressSearch}
+                        onChange={(event) => setProgressSearch(event.target.value)}
+                      />
+                    </label>
+                    {isLoading ? <p role="status">Cargando pacientes…</p> : filteredProgressPatients.length ? (
+                      <ul className="patient-list patient-list-scroll">
+                        {filteredProgressPatients.map((patient) => (
+                          <li key={patient.id}>
+                            <button
+                              type="button"
+                              className="patient-list-button"
+                              onClick={() => { setProgressPatientId(patient.id); setPatientProgress(null); setIsProgressLoading(true); setError('') }}
+                            >
+                              <span><strong>{patient.firstName} {patient.lastName}</strong></span>
+                              <span aria-hidden="true">›</span>
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : <p className="no-patient-results" role="status">No se encontraron pacientes</p>}
+                  </section>
+                )}
+              </>
             )}
           </div>
         )}
@@ -853,12 +965,22 @@ function PatientWorkspace({ user, onLogout }) {
   const [patient, setPatient] = useState(null)
   const [exerciseIds, setExerciseIds] = useState([])
   const [exerciseConfigurations, setExerciseConfigurations] = useState({})
+  const [completedExerciseIds, setCompletedExerciseIds] = useState([])
   const [upcomingAppointment, setUpcomingAppointment] = useState(null)
   const [appointmentError, setAppointmentError] = useState('')
   const [selectedExercise, setSelectedExercise] = useState(null)
   const [openCategory, setOpenCategory] = useState(null)
   const [error, setError] = useState('')
   const appointmentRequestId = useRef(0)
+
+  const refreshCompletedExercises = async () => {
+    try {
+      const { completedExerciseIds: result } = await apiRequest('/api/patient/exercise-progress/today')
+      setCompletedExerciseIds(result)
+    } catch (requestError) {
+      setError(requestError.message)
+    }
+  }
 
   useEffect(() => {
     apiRequest('/api/patient/me')
@@ -875,6 +997,18 @@ function PatientWorkspace({ user, onLogout }) {
         ))
       })
       .catch((requestError) => setError(requestError.message))
+  }, [])
+
+  useEffect(() => {
+    let active = true
+    apiRequest('/api/patient/exercise-progress/today')
+      .then(({ completedExerciseIds: result }) => {
+        if (active) setCompletedExerciseIds(result)
+      })
+      .catch((requestError) => {
+        if (active) setError(requestError.message)
+      })
+    return () => { active = false }
   }, [])
 
   useEffect(() => {
@@ -919,6 +1053,11 @@ function PatientWorkspace({ user, onLogout }) {
     }
   }
 
+  const returnToExerciseList = async () => {
+    await refreshCompletedExercises()
+    setSelectedExercise(null)
+  }
+
   if (selectedExercise) {
     return (
       <section className="patient-exercise-view">
@@ -926,11 +1065,11 @@ function PatientWorkspace({ user, onLogout }) {
           <ExercisePlayer
             exercise={selectedExercise.exercise}
             configuration={selectedExercise.configuration}
-            onBack={() => setSelectedExercise(null)}
-            onFinish={() => setSelectedExercise(null)}
+            onBack={returnToExerciseList}
+            onFinish={returnToExerciseList}
           />
         ) : (
-          <ExerciseDetailView exercise={selectedExercise.exercise} onBack={() => setSelectedExercise(null)} />
+          <ExerciseDetailView exercise={selectedExercise.exercise} onBack={returnToExerciseList} />
         )}
       </section>
     )
@@ -964,6 +1103,7 @@ function PatientWorkspace({ user, onLogout }) {
               setOpenCategory={setOpenCategory}
               selectedExerciseIds={exerciseIds}
               exerciseConfigurations={exerciseConfigurations}
+              completedExerciseIds={completedExerciseIds}
               onSelectExercise={openAssignedExercise}
             />
           ) : <p>Tu terapeuta todavía no asignó ejercicios.</p>}
@@ -971,6 +1111,24 @@ function PatientWorkspace({ user, onLogout }) {
       </div>
     </section>
   )
+}
+
+function formatActivityDuration(totalSeconds) {
+  const seconds = Math.max(0, Math.floor(totalSeconds))
+  const minutes = Math.floor(seconds / 60)
+  const remainingSeconds = seconds % 60
+  const minuteLabel = minutes === 1 ? 'minuto' : 'minutos'
+  const secondLabel = remainingSeconds === 1 ? 'segundo' : 'segundos'
+  if (!minutes) return `${remainingSeconds} ${secondLabel}`
+  if (!remainingSeconds) return `${minutes} ${minuteLabel}`
+  return `${minutes} ${minuteLabel} y ${remainingSeconds} ${secondLabel}`
+}
+
+function formatExerciseSessionDate(value) {
+  return new Intl.DateTimeFormat('es-AR', {
+    timeZone: 'UTC',
+    dateStyle: 'long',
+  }).format(new Date(`${value}T12:00:00Z`))
 }
 
 function formatPatientAppointmentDate(value) {
